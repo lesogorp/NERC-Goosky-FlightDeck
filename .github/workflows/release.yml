@@ -1,0 +1,33 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.3 zip unzip
+
+      - name: Build and test release
+        run: bash tools/build-release.sh
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            build/NERC_Goosky_FlightDeck.zip \
+            --generate-notes \
+            --title "NERC Goosky FlightDeck $GITHUB_REF_NAME"
