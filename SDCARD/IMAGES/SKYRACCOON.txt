@@ -1,0 +1,30 @@
+SkyRaccoon model-image attribution
+https://www.skyraccoon.com/
+
+GKS1OR.png
+Legend S1 New Edition, Orange
+https://www.skyraccoon.com/aircraft/goosky_legend-s1-new-edition_lgnds1ne-or
+
+GKS1BL.png
+Legend S1 New Edition, Blue
+https://www.skyraccoon.com/aircraft/goosky_legend-s1-new-edition_lgnds1ne-bl
+
+GKS1PU.png
+Legend S1 New Edition, Purple
+https://www.skyraccoon.com/aircraft/GOOSKY_Legend-S1-New-Edition_LGNDS1NE-PU
+
+GKS2OR.png
+S2 Max, Orange
+https://www.skyraccoon.com/aircraft/GOOSKY_S2-Max_BAF080001
+
+GKS2BL.png
+S2 Max, Blue
+https://www.skyraccoon.com/aircraft/goosky_s2-max_baf080002
+
+GKS2PU.png
+S2 Max, Purple
+https://www.skyraccoon.com/aircraft/goosky_s2-max_baf080003
+
+Images are provided by SkyRaccoon as downloadable 192x114 radio icons.
+Copyright SkyRaccoon. Confirm redistribution permission before publishing this
+complete package in a public repository.
