@@ -1,0 +1,7 @@
+build/
+*.luac
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
