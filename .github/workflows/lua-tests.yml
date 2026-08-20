@@ -1,0 +1,38 @@
+name: Lua tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.3 zip unzip
+
+      - name: Parse Lua sources
+        run: |
+          luac5.3 -p SDCARD/WIDGETS/NERC_GSkyFD/main.lua
+          luac5.3 -p SDCARD/SCRIPTS/TOOLS/GooskySetup.lua
+
+      - name: Run EdgeTX mocks
+        run: lua5.3 tests/run_tests.lua
+
+      - name: Build install ZIP
+        run: bash tools/build-release.sh
+
+      - name: Upload install ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: NERC-Goosky-FlightDeck
+          path: build/NERC_Goosky_FlightDeck.zip
+          if-no-files-found: error
