@@ -1,0 +1,50 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "EdgeTX: Run widget tests",
+      "type": "shell",
+      "command": "lua",
+      "args": ["tests/run_tests.lua"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "$runner = Get-Command lua -ErrorAction SilentlyContinue; if (-not $runner) { $runner = Get-Command lua53 -ErrorAction SilentlyContinue }; if (-not $runner) { $runner = Get-Command texlua -ErrorAction SilentlyContinue }; if (-not $runner) { throw 'Install Lua 5.3, add it to PATH, then restart VS Code.' }; & $runner.Source tests/run_tests.lua"
+        ]
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "EdgeTX: Copy widget to simulator SD",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$sdSource = '${workspaceFolder}\\SDCARD'; $sdDestination = '${input:simSdPath}'; Copy-Item -Path \"$sdSource\\*\" -Destination $sdDestination -Recurse -Force; Copy-Item -Path '${workspaceFolder}\\dev\\simulator.lua' -Destination \"$sdDestination\\WIDGETS\\NERC_GSkyFD\\simulator.lua\" -Force; Write-Host \"Updated $sdDestination with widget, model wizard, images, and simulated telemetry\""
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "simSdPath",
+      "type": "promptString",
+      "description": "Full path to the EdgeTX simulator SD-card directory",
+      "default": "C:\\EdgeTX\\simulator-sd"
+    }
+  ]
+}

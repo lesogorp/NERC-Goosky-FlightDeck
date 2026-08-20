@@ -1,0 +1,20 @@
+{
+  "Lua.runtime.version": "Lua 5.3",
+  "Lua.workspace.checkThirdParty": false,
+  "Lua.diagnostics.globals": [
+    "lcd", "model", "Bitmap", "bit32",
+    "LCD_W", "LCD_H", "LED_STRIP_LENGTH",
+    "getTime", "getRtcTime", "getDateTime", "getFieldInfo", "getValue",
+    "getSwitchValue", "fstat", "crossfireTelemetryPush", "crossfireTelemetryPop",
+    "playHaptic", "setRGBLedColor", "applyRGBLedColors",
+    "CHOICE", "COLOR", "VALUE", "SOURCE", "SWITCH",
+    "WHITE", "BLACK", "GREEN", "RED", "YELLOW", "ORANGE",
+    "BOLD", "CENTER", "VCENTER", "RIGHT", "DBLSIZE", "XXLSIZE",
+    "MIDSIZE", "SMLSIZE", "CUSTOM_COLOR", "SOLID",
+    "EVT_TOUCH_FIRST", "EVT_TOUCH_TAP", "EVT_TOUCH_BREAK",
+    "EVT_VIRTUAL_PREV", "EVT_VIRTUAL_NEXT", "EVT_VIRTUAL_ENTER"
+  ],
+  "files.associations": {
+    "main.lua": "lua"
+  }
+}
