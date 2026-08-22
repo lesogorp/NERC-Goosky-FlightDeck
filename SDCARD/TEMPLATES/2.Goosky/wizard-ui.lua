@@ -23,6 +23,7 @@
 --   * explicit high-contrast white labels
 --   * large touch-friendly BACK / NEXT / CONFIRM buttons
 --   * no tiny stock previous/next page arrows
+--   * fixed-column review/summary rows for consistent alignment
 
 local wizard = {}
 
@@ -35,6 +36,7 @@ local NAV_H = math.floor(60 * SCALE)
 local BTN_W = math.floor(130 * SCALE)
 local BTN_H = math.floor(52 * SCALE)
 local BTN_PAD = math.floor(10 * SCALE)
+local SUMMARY_H = math.floor(30 * SCALE)
 local exit = false
 
 function wizard.exitWizard()
@@ -269,17 +271,51 @@ function wizard.summaryLine(title, chNum, text2)
         txt = text2
     end
 
-    return wizard.settings({
-        title = title,
+    -- Dedicated review row. Keep every label/value boundary identical so a
+    -- longer review page reads as a compact two-column table.
+    return {
+        type = "rectangle",
+        w = lvgl.PERCENT_SIZE + 100,
+        h = SUMMARY_H,
+        thickness = THICKNESS,
+        flexPad = 0,
+        flexFlow = lvgl.FLOW_ROW,
+        align = LEFT | VCENTER,
         children = {
             {
-                type = "label",
-                w = lvgl.PERCENT_SIZE + 100,
-                color = WHITE,
-                text = txt,
+                type = "rectangle",
+                w = lvgl.PERCENT_SIZE + 42,
+                h = SUMMARY_H,
+                thickness = THICKNESS,
+                align = LEFT | VCENTER,
+                children = {
+                    {
+                        type = "label",
+                        x = math.floor(6 * SCALE),
+                        w = lvgl.PERCENT_SIZE + 95,
+                        color = WHITE,
+                        text = title .. ":",
+                    },
+                },
+            },
+            {
+                type = "rectangle",
+                w = lvgl.PERCENT_SIZE + 58,
+                h = SUMMARY_H,
+                thickness = THICKNESS,
+                align = LEFT | VCENTER,
+                children = {
+                    {
+                        type = "label",
+                        x = math.floor(4 * SCALE),
+                        w = lvgl.PERCENT_SIZE + 95,
+                        color = WHITE,
+                        text = txt,
+                    },
+                },
             },
         },
-    })
+    }
 end
 
 return wizard
