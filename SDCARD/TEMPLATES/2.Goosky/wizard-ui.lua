@@ -24,6 +24,7 @@
 --   * large touch-friendly BACK / NEXT / CONFIRM buttons
 --   * no tiny stock previous/next page arrows
 --   * fixed-column review/summary rows for consistent alignment
+--   * responsive sizing for 480x320 (TX15/GX15) and 800x480 (TX16S MK3)
 
 local wizard = {}
 
@@ -31,13 +32,37 @@ local THICKNESS = 0
 local LANDSCAPE = 0
 local PORTRAIT = 1
 local ORIENTATION = (LCD_W > LCD_H) and LANDSCAPE or PORTRAIT
-local SCALE = lvgl.LCD_SCALE or 1
-local NAV_H = math.floor(60 * SCALE)
-local BTN_W = math.floor(130 * SCALE)
-local BTN_H = math.floor(52 * SCALE)
-local BTN_PAD = math.floor(10 * SCALE)
-local SUMMARY_H = math.floor(30 * SCALE)
+local LARGE_LCD = LCD_W >= 700
+
+-- Explicit breakpoints are more predictable than relying only on LCD_SCALE.
+-- 480x320: TX15 / GX15
+-- 800x480: TX16S MK3
+local NAV_H = LARGE_LCD and 84 or 60
+local BTN_W = LARGE_LCD and 200 or 140
+local BTN_H = LARGE_LCD and 64 or 52
+local BTN_PAD = LARGE_LCD and 18 or 10
+local SUMMARY_H = LARGE_LCD and 42 or 30
+local SUMMARY_X_PAD = LARGE_LCD and 10 or 6
+local NAV_FONT = LARGE_LCD and DBLSIZE or MIDSIZE
+local FIELD_FONT = LARGE_LCD and MIDSIZE or 0
+local RADIUS = LARGE_LCD and 12 or 8
 local exit = false
+
+function wizard.isLargeLCD()
+    return LARGE_LCD
+end
+
+function wizard.metrics()
+    return {
+        large = LARGE_LCD,
+        navH = NAV_H,
+        buttonW = BTN_W,
+        buttonH = BTN_H,
+        buttonPad = BTN_PAD,
+        summaryH = SUMMARY_H,
+        fieldFont = FIELD_FONT,
+    }
+end
 
 function wizard.exitWizard()
     return exit
@@ -62,10 +87,10 @@ local function navButton(text, x, press, isNext)
         h = BTN_H,
         text = text,
         press = press,
-        font = MIDSIZE,
+        font = NAV_FONT,
         color = isNext and ORANGE or DARKGREY,
         textColor = isNext and BLACK or WHITE,
-        cornerRadius = math.floor(8 * SCALE),
+        cornerRadius = RADIUS,
     }
 end
 
@@ -213,6 +238,7 @@ function wizard.settings(settings)
                         type = "label",
                         w = lvgl.PERCENT_SIZE + 100,
                         color = WHITE,
+                        font = FIELD_FONT,
                         text = settings.title,
                     },
                 },
@@ -248,6 +274,7 @@ function wizard.settingsVertical(settings)
                         type = "label",
                         w = lvgl.PERCENT_SIZE + 100,
                         color = WHITE,
+                        font = FIELD_FONT,
                         text = settings.title,
                     },
                 },
@@ -271,8 +298,6 @@ function wizard.summaryLine(title, chNum, text2)
         txt = text2
     end
 
-    -- Dedicated review row. Keep every label/value boundary identical so a
-    -- longer review page reads as a compact two-column table.
     return {
         type = "rectangle",
         w = lvgl.PERCENT_SIZE + 100,
@@ -291,9 +316,10 @@ function wizard.summaryLine(title, chNum, text2)
                 children = {
                     {
                         type = "label",
-                        x = math.floor(6 * SCALE),
+                        x = SUMMARY_X_PAD,
                         w = lvgl.PERCENT_SIZE + 95,
                         color = WHITE,
+                        font = FIELD_FONT,
                         text = title .. ":",
                     },
                 },
@@ -307,9 +333,10 @@ function wizard.summaryLine(title, chNum, text2)
                 children = {
                     {
                         type = "label",
-                        x = math.floor(4 * SCALE),
+                        x = SUMMARY_X_PAD,
                         w = lvgl.PERCENT_SIZE + 95,
                         color = WHITE,
+                        font = FIELD_FONT,
                         text = txt,
                     },
                 },
