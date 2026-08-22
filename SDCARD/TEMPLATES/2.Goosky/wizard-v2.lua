@@ -81,7 +81,30 @@ local function reviewPage()
 
     lvgl.build(wizard.page({
         title = TITLE,
-        subtitle = "Review",
+        subtitle = "Review / Confirm",
+        hasPrevious = true,
+        hasNext = true,
+        previousFunc = function() selectPage(-1) end,
+        nextFunc = function() selectPage(1) end,
+        children1 = {
+            wizard.summaryLine("Model", nil, models[state.model]),
+            wizard.summaryLine("Color", nil, colors[state.color]),
+            wizard.summaryLine("Timer", nil, timers[state.timer]),
+        },
+        children2 = {
+            label("Review the selections."),
+            label("Press > to CONFIRM and continue."),
+            label("Press < to go back and make changes."),
+        },
+    }))
+end
+
+local function completePage()
+    lvgl.clear()
+
+    lvgl.build(wizard.page({
+        title = TITLE,
+        subtitle = "Confirmed",
         hasPrevious = true,
         hasNext = false,
         previousFunc = function() selectPage(-1) end,
@@ -91,14 +114,15 @@ local function reviewPage()
             wizard.summaryLine("Timer", nil, timers[state.timer]),
         },
         children2 = {
-            label("Native EdgeTX template wizard is running."),
-            label("If you can see this page, the blank-screen startup problem is fixed."),
+            label("Wizard flow confirmed successfully."),
+            label("Diagnostic build only: model programming is still disabled."),
+            label("Hold [RTN] to exit."),
         },
     }))
 end
 
 local function init()
-    pages = { modelPage, reviewPage }
+    pages = { modelPage, reviewPage, completePage }
     page = 1
     pages[page]()
 end
