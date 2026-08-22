@@ -20,12 +20,13 @@
 -- Author: Alexander Gnauck
 -- Vendored from EdgeTX 2.12 wizard-ui.lua so the NERC Goosky wizard is self-contained.
 -- NERC changes:
+--   * fixed dark wizard body for predictable contrast across EdgeTX themes
 --   * explicit high-contrast white labels
---   * stable dark wizard body independent of the selected EdgeTX theme
 --   * large touch-friendly BACK / NEXT / CONFIRM buttons
 --   * no tiny stock previous/next page arrows
 --   * fixed-column review/summary rows for consistent alignment
 --   * responsive sizing for 480x320 (TX15/GX15) and 800x480 (TX16S MK3)
+--   * responsive model-image helper for Review / Confirm
 
 local wizard = {}
 
@@ -34,9 +35,11 @@ local LANDSCAPE = 0
 local PORTRAIT = 1
 local ORIENTATION = (LCD_W > LCD_H) and LANDSCAPE or PORTRAIT
 local LARGE_LCD = LCD_W >= 700
+
+-- Keep the NERC wizard readable regardless of the active EdgeTX theme.
+-- The native page header remains EdgeTX-owned; the wizard body is controlled.
 local BODY_COLOR = BLACK
-local PANEL_COLOR = BLACK
-local REVIEW_COLOR = DARKGREY
+local PANEL_COLOR = DARKGREY
 
 -- Explicit breakpoints are more predictable than relying only on LCD_SCALE.
 -- 480x320: TX15 / GX15
@@ -50,6 +53,7 @@ local SUMMARY_X_PAD = LARGE_LCD and 10 or 6
 local NAV_FONT = LARGE_LCD and DBLSIZE or MIDSIZE
 local FIELD_FONT = LARGE_LCD and MIDSIZE or 0
 local RADIUS = LARGE_LCD and 12 or 8
+local IMAGE_PAD = LARGE_LCD and 24 or 12
 local exit = false
 
 function wizard.isLargeLCD()
@@ -65,6 +69,7 @@ function wizard.metrics()
         buttonPad = BTN_PAD,
         summaryH = SUMMARY_H,
         fieldFont = FIELD_FONT,
+        imagePad = IMAGE_PAD,
     }
 end
 
@@ -92,7 +97,7 @@ local function navButton(text, x, press, isNext)
         text = text,
         press = press,
         font = NAV_FONT,
-        color = isNext and ORANGE or DARKGREY,
+        color = isNext and ORANGE or PANEL_COLOR,
         textColor = isNext and BLACK or WHITE,
         cornerRadius = RADIUS,
     }
@@ -158,7 +163,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 60,
                                 h = lvgl.PERCENT_SIZE + 100,
                                 thickness = THICKNESS,
-                                color = PANEL_COLOR,
+                                color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children1,
@@ -169,7 +174,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 40,
                                 h = lvgl.PERCENT_SIZE + 100,
                                 thickness = THICKNESS,
-                                color = PANEL_COLOR,
+                                color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children2,
@@ -206,7 +211,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 100,
                                 h = lvgl.PERCENT_SIZE + 60,
                                 thickness = THICKNESS,
-                                color = PANEL_COLOR,
+                                color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children1,
@@ -217,7 +222,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 100,
                                 h = lvgl.PERCENT_SIZE + 40,
                                 thickness = THICKNESS,
-                                color = PANEL_COLOR,
+                                color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children2,
@@ -237,14 +242,14 @@ function wizard.settings(settings)
         flexPad = 0,
         flexFlow = lvgl.FLOW_ROW,
         thickness = THICKNESS,
-        color = PANEL_COLOR,
+        color = BODY_COLOR,
         w = lvgl.PERCENT_SIZE + 100,
         visible = settings.visible,
         children = {
             {
                 type = "rectangle",
                 thickness = THICKNESS,
-                color = PANEL_COLOR,
+                color = BODY_COLOR,
                 w = lvgl.PERCENT_SIZE + 60,
                 children = {
                     {
@@ -259,7 +264,7 @@ function wizard.settings(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
-                color = PANEL_COLOR,
+                color = BODY_COLOR,
                 w = lvgl.PERCENT_SIZE + 40,
                 flexFlow = lvgl.FLOW_ROW,
                 align = LEFT | VCENTER,
@@ -274,7 +279,7 @@ function wizard.settingsVertical(settings)
         type = "rectangle",
         flexPad = 0,
         thickness = THICKNESS,
-        color = PANEL_COLOR,
+        color = BODY_COLOR,
         w = lvgl.PERCENT_SIZE + 100,
         flexFlow = lvgl.FLOW_COLUMN,
         align = LEFT | VTOP,
@@ -283,7 +288,7 @@ function wizard.settingsVertical(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
-                color = PANEL_COLOR,
+                color = BODY_COLOR,
                 w = lvgl.PERCENT_SIZE + 100,
                 children = {
                     {
@@ -298,7 +303,7 @@ function wizard.settingsVertical(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
-                color = PANEL_COLOR,
+                color = BODY_COLOR,
                 flexFlow = lvgl.FLOW_ROW,
                 align = LEFT | VCENTER,
                 children = settings.children,
@@ -320,7 +325,7 @@ function wizard.summaryLine(title, chNum, text2)
         w = lvgl.PERCENT_SIZE + 100,
         h = SUMMARY_H,
         thickness = THICKNESS,
-        color = REVIEW_COLOR,
+        color = BODY_COLOR,
         flexPad = 0,
         flexFlow = lvgl.FLOW_ROW,
         align = LEFT | VCENTER,
@@ -330,7 +335,7 @@ function wizard.summaryLine(title, chNum, text2)
                 w = lvgl.PERCENT_SIZE + 42,
                 h = SUMMARY_H,
                 thickness = THICKNESS,
-                color = REVIEW_COLOR,
+                color = BODY_COLOR,
                 align = LEFT | VCENTER,
                 children = {
                     {
@@ -348,7 +353,7 @@ function wizard.summaryLine(title, chNum, text2)
                 w = lvgl.PERCENT_SIZE + 58,
                 h = SUMMARY_H,
                 thickness = THICKNESS,
-                color = REVIEW_COLOR,
+                color = BODY_COLOR,
                 align = LEFT | VCENTER,
                 children = {
                     {
@@ -362,6 +367,22 @@ function wizard.summaryLine(title, chNum, text2)
                 },
             },
         },
+    }
+end
+
+-- Based on the stock EdgeTX 2.12 wizard image helper. The surrounding
+-- 60/40 page layout determines the available panel size; LVGL scales the
+-- supplied model bitmap into this box while preserving the native asset.
+function wizard.image(settings)
+    local border = IMAGE_PAD
+    return {
+        type = "image",
+        x = border,
+        y = border,
+        w = math.max(1, LCD_W * 40 / 100 - border * 2),
+        h = math.max(1, lvgl.PAGE_BODY_HEIGHT - NAV_H - border * 2),
+        file = settings.file,
+        visible = settings.visibleFunc,
     }
 end
 
