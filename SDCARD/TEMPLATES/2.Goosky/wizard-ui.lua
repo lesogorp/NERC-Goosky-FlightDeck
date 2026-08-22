@@ -28,6 +28,7 @@
 --   * responsive sizing for 480x320 (TX15/GX15) and 800x480 (TX16S MK3)
 --   * responsive model-image helper for Review / Confirm
 --   * full-width page helper for touch-first switch assignment
+--   * compact 480x320 summary rows so Review stays above the nav bar
 
 local wizard = {}
 
@@ -43,7 +44,7 @@ local NAV_H = LARGE_LCD and 84 or 60
 local BTN_W = LARGE_LCD and 200 or 140
 local BTN_H = LARGE_LCD and 64 or 52
 local BTN_PAD = LARGE_LCD and 18 or 10
-local SUMMARY_H = LARGE_LCD and 36 or 30
+local SUMMARY_H = LARGE_LCD and 34 or 24
 local SUMMARY_X_PAD = LARGE_LCD and 10 or 6
 local NAV_FONT = LARGE_LCD and DBLSIZE or MIDSIZE
 local FIELD_FONT = 0
