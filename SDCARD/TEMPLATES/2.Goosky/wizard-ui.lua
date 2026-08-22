@@ -19,6 +19,7 @@
 
 -- Author: Alexander Gnauck
 -- Vendored from EdgeTX 2.12 wizard-ui.lua so the NERC Goosky wizard is self-contained.
+-- NERC changes: inherit normal foreground text for better contrast on radio themes.
 
 local wizard = {}
 
@@ -145,7 +146,6 @@ function wizard.settings(settings)
                     {
                         type = "label",
                         w = lvgl.PERCENT_SIZE + 100,
-                        color = COLOR_THEME_PRIMARY1,
                         text = settings.title,
                     },
                 },
@@ -180,7 +180,6 @@ function wizard.settingsVertical(settings)
                     {
                         type = "label",
                         w = lvgl.PERCENT_SIZE + 100,
-                        color = COLOR_THEME_PRIMARY1,
                         text = settings.title,
                     },
                 },
