@@ -10,6 +10,9 @@ local wizard = loadScript(RUN_DIR .. "/wizard-ui.lua")()
 
 local TITLE = "NERC Goosky BNF Wizard"
 local MAX_RECEIVER_ID = 63
+local TARGET_MODULE_INDEX = 0
+local TARGET_RF_TYPE = "TYPE_CROSSFIRE"
+local TARGET_RF_SUBTYPE = "0"
 local page = 1
 local pages = {}
 
@@ -45,6 +48,8 @@ local state = {
         id = nil,
         status = "not-scanned",
         scannedModels = 0,
+        matchingModels = 0,
+        usedIds = 0,
     },
 }
 
@@ -198,25 +203,50 @@ local function receiverIdRequired()
     return receiverIdModels[models[state.model]] == true
 end
 
--- EdgeTX 2.12 stores receiver numbers under:
--- header:
---   modelId:
---     0:
---       val: <id>
---     1:
---       val: <id>
--- Scan only that YAML block so unrelated "val" fields are ignored.
-local function scanModelIdsFromFile(path, used)
+local function cleanYamlScalar(value)
+    if not value then return nil end
+    value = string.match(value, "^%s*(.-)%s*$") or value
+    value = string.gsub(value, '^"(.*)"$', "%1")
+    value = string.gsub(value, "^'(.*)'$", "%1")
+    return value
+end
+
+-- Read the RF identity that EdgeTX itself uses for Receiver-ID uniqueness:
+--   module index + module type + subtype + modelId.
+-- For CRSF the YAML normally omits subType, which corresponds to subtype 0.
+local function scanRfIdentityFromFile(path)
     if not io or type(io.open) ~= "function" or type(io.read) ~= "function" then
-        return false
+        return false, nil
     end
 
     local f = io.open(path, "r")
-    if not f then return false end
+    if not f then return false, nil end
+
+    local result = {
+        modelId = nil,
+        rfType = nil,
+        rfSubType = TARGET_RF_SUBTYPE,
+    }
 
     local buffer = ""
-    local inModelId = false
-    local modelIdIndent = 0
+    local section = nil
+    local sectionIndent = -1
+    local inTargetSlot = false
+    local targetSlotIndent = -1
+
+    local function resetSection()
+        section = nil
+        sectionIndent = -1
+        inTargetSlot = false
+        targetSlotIndent = -1
+    end
+
+    local function enterSection(name, indent)
+        section = name
+        sectionIndent = indent
+        inTargetSlot = false
+        targetSlotIndent = -1
+    end
 
     local function processLine(line)
         line = string.gsub(line, "\r$", "")
@@ -226,23 +256,55 @@ local function scanModelIdsFromFile(path, used)
         local indent = #indentText
         local trimmed = string.match(body, "^%s*(.-)%s*$") or body
 
-        if inModelId then
-            if trimmed ~= "" and indent <= modelIdIndent then
-                inModelId = false
-            else
-                local value = string.match(trimmed, "^val:%s*(%d+)")
-                if value then
-                    local id = tonumber(value)
-                    if id and id >= 0 and id <= MAX_RECEIVER_ID then
-                        used[id] = true
-                    end
-                end
+        if trimmed == "" then return end
+
+        if section and indent <= sectionIndent then
+            resetSection()
+        elseif section and inTargetSlot and indent <= targetSlotIndent then
+            inTargetSlot = false
+            targetSlotIndent = -1
+        end
+
+        if not section then
+            if trimmed == "modelId:" then
+                enterSection("modelId", indent)
+                return
+            elseif trimmed == "moduleData:" then
+                enterSection("moduleData", indent)
+                return
             end
         end
 
-        if not inModelId and trimmed == "modelId:" then
-            inModelId = true
-            modelIdIndent = indent
+        if not section then return end
+
+        if not inTargetSlot then
+            local slot = string.match(trimmed, "^(%d+):$")
+            if slot and indent > sectionIndent and tonumber(slot) == TARGET_MODULE_INDEX then
+                inTargetSlot = true
+                targetSlotIndent = indent
+            end
+            return
+        end
+
+        if section == "modelId" then
+            local value = string.match(trimmed, "^val:%s*(%d+)%s*$")
+            if value then
+                local id = tonumber(value)
+                if id and id >= 0 and id <= MAX_RECEIVER_ID then
+                    result.modelId = id
+                end
+            end
+        elseif section == "moduleData" then
+            local rfType = string.match(trimmed, "^type:%s*(.-)%s*$")
+            if rfType then
+                result.rfType = cleanYamlScalar(rfType)
+                return
+            end
+
+            local rfSubType = string.match(trimmed, "^subType:%s*(.-)%s*$")
+            if rfSubType then
+                result.rfSubType = cleanYamlScalar(rfSubType) or TARGET_RF_SUBTYPE
+            end
         end
     end
 
@@ -261,12 +323,23 @@ local function scanModelIdsFromFile(path, used)
 
     if #buffer > 0 then processLine(buffer) end
     io.close(f)
-    return true
+    return true, result
+end
+
+local function sameRfIdentity(identity)
+    if not identity then return false end
+    if identity.rfType ~= TARGET_RF_TYPE then return false end
+
+    -- EdgeTX compares module subtype too. CRSF normally has no subType entry
+    -- in YAML, so scanRfIdentityFromFile() defaults it to 0.
+    return tostring(identity.rfSubType or TARGET_RF_SUBTYPE) == TARGET_RF_SUBTYPE
 end
 
 local function allocateReceiverId()
     state.receiver.id = nil
     state.receiver.scannedModels = 0
+    state.receiver.matchingModels = 0
+    state.receiver.usedIds = 0
 
     if type(dir) ~= "function" then
         state.receiver.status = "scan-error"
@@ -288,9 +361,16 @@ local function allocateReceiverId()
         if type(filename) == "string"
             and string.match(string.lower(filename), "%.yml$")
             and filename ~= currentFilename then
-            local ok = scanModelIdsFromFile(MODELS_DIR .. "/" .. filename, used)
+            local ok, identity = scanRfIdentityFromFile(MODELS_DIR .. "/" .. filename)
             if ok then
                 state.receiver.scannedModels = state.receiver.scannedModels + 1
+
+                if sameRfIdentity(identity) then
+                    state.receiver.matchingModels = state.receiver.matchingModels + 1
+                    if identity.modelId ~= nil then
+                        used[identity.modelId] = true
+                    end
+                end
             else
                 scanOk = false
             end
@@ -302,6 +382,14 @@ local function allocateReceiverId()
         return
     end
 
+    for id = 0, MAX_RECEIVER_ID do
+        if used[id] then
+            state.receiver.usedIds = state.receiver.usedIds + 1
+        end
+    end
+
+    -- Walk the same valid Receiver-ID range EdgeTX exposes and choose the
+    -- first ID not used by another model with the same RF identity.
     for id = 0, MAX_RECEIVER_ID do
         if not used[id] then
             state.receiver.id = id
