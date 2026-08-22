@@ -42,12 +42,12 @@ for seconds = 30, 1200, 30 do
 end
 
 local fields = {
-    model = 2,        -- S1 V2: current proven default
+    model = 2,
     color = 1,
-    timer = 10,       -- 5:00
+    timer = 10,
     att = 1,
     bank = 1,
-    hold = 16,        -- SF UP in the flattened position list
+    hold = 16,
     reset = 7,
 }
 
@@ -88,12 +88,12 @@ end
 local function modelPage()
     lvgl.clear()
 
+    local modelNames = {}
+    for _, item in ipairs(models) do modelNames[#modelNames + 1] = item.name end
+
     local children1 = {
-        choiceRow("Goosky model", (function()
-            local values = {}
-            for _, item in ipairs(models) do values[#values + 1] = item.name end
-            return values
-        end)(), function() return fields.model end,
+        choiceRow("Goosky model", modelNames,
+            function() return fields.model end,
             function(value) fields.model = value end),
         choiceRow("Color", colors,
             function() return fields.color end,
@@ -179,7 +179,7 @@ local function summaryPage()
 
     local children2 = {
         textBlock("Review only - no model changes are written in this first native-wizard test build."),
-        textBlock(status, selected.profileReady and COLOR_THEME_PRIMARY1 or COLOR_THEME_WARNING),
+        textBlock(status),
         textBlock("MOTOR MUST BE DISCONNECTED before any later build is allowed to apply model changes."),
     }
 
