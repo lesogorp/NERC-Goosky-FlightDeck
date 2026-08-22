@@ -230,9 +230,11 @@ local function switchCaptureRow(row)
     local captureH = metrics.large and 50 or 36
     local captureW = math.floor(LCD_W * (metrics.large and 0.60 or 0.62))
     local active = state.capture.active == row.key
-    local assigned = state.switches[row.key] ~= nil
 
-    local buttonColor = active and ORANGE or (assigned and DARKGREY or COLOR_THEME_SECONDARY2)
+    -- Switch assignment controls intentionally use a fixed palette instead of
+    -- EdgeTX theme colors. Some stock light themes make secondary colors too
+    -- pale for a clear touch target. The rest of the page remains theme-aware.
+    local buttonColor = active and ORANGE or DARKGREY
     local buttonTextColor = active and BLACK or WHITE
 
     return {
