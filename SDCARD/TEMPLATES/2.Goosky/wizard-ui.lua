@@ -19,7 +19,10 @@
 
 -- Author: Alexander Gnauck
 -- Vendored from EdgeTX 2.12 wizard-ui.lua so the NERC Goosky wizard is self-contained.
--- NERC changes: inherit normal foreground text for better contrast on radio themes.
+-- NERC changes:
+--   * explicit high-contrast white labels
+--   * large touch-friendly BACK / NEXT / CONFIRM buttons
+--   * no tiny stock previous/next page arrows
 
 local wizard = {}
 
@@ -27,6 +30,11 @@ local THICKNESS = 0
 local LANDSCAPE = 0
 local PORTRAIT = 1
 local ORIENTATION = (LCD_W > LCD_H) and LANDSCAPE or PORTRAIT
+local SCALE = lvgl.LCD_SCALE or 1
+local NAV_H = math.floor(60 * SCALE)
+local BTN_W = math.floor(130 * SCALE)
+local BTN_H = math.floor(52 * SCALE)
+local BTN_PAD = math.floor(10 * SCALE)
 local exit = false
 
 function wizard.exitWizard()
@@ -43,7 +51,55 @@ local function closeDialog()
     })
 end
 
+local function navButton(text, x, press, isNext)
+    return {
+        type = "button",
+        x = x,
+        y = math.floor((NAV_H - BTN_H) / 2),
+        w = BTN_W,
+        h = BTN_H,
+        text = text,
+        press = press,
+        font = MIDSIZE,
+        color = isNext and ORANGE or DARKGREY,
+        textColor = isNext and BLACK or WHITE,
+        cornerRadius = math.floor(8 * SCALE),
+    }
+end
+
+local function navigation(settings)
+    local children = {}
+
+    if settings.hasPrevious then
+        children[#children + 1] = navButton(
+            settings.previousLabel or "<  BACK",
+            BTN_PAD,
+            settings.previousFunc,
+            false
+        )
+    end
+
+    if settings.hasNext then
+        children[#children + 1] = navButton(
+            settings.nextLabel or "NEXT  >",
+            LCD_W - BTN_W - BTN_PAD,
+            settings.nextFunc,
+            true
+        )
+    end
+
+    return {
+        type = "rectangle",
+        w = lvgl.PERCENT_SIZE + 100,
+        h = NAV_H,
+        thickness = THICKNESS,
+        children = children,
+    }
+end
+
 function wizard.page(settings)
+    local bodyH = math.max(1, lvgl.PAGE_BODY_HEIGHT - NAV_H)
+
     if ORIENTATION == LANDSCAPE then
         return {
             {
@@ -51,37 +107,41 @@ function wizard.page(settings)
                 title = settings.title,
                 subtitle = settings.subtitle,
                 flexPad = 0,
-                flexFlow = lvgl.FLOW_ROW,
+                flexFlow = lvgl.FLOW_COLUMN,
                 align = CENTER | VTOP,
                 backButton = true,
-                nextButton = {
-                    press = settings.nextFunc,
-                    active = function() return settings.hasNext end,
-                },
-                prevButton = {
-                    press = settings.previousFunc,
-                    active = function() return settings.hasPrevious end,
-                },
                 back = closeDialog,
                 children = {
                     {
                         type = "rectangle",
-                        w = lvgl.PERCENT_SIZE + 60,
-                        h = lvgl.PERCENT_SIZE + 100,
+                        w = lvgl.PERCENT_SIZE + 100,
+                        h = bodyH,
                         thickness = THICKNESS,
-                        flexFlow = lvgl.FLOW_COLUMN,
+                        flexFlow = lvgl.FLOW_ROW,
                         align = LEFT | VTOP,
-                        children = settings.children1,
+                        children = {
+                            {
+                                type = "rectangle",
+                                w = lvgl.PERCENT_SIZE + 60,
+                                h = lvgl.PERCENT_SIZE + 100,
+                                thickness = THICKNESS,
+                                flexFlow = lvgl.FLOW_COLUMN,
+                                align = LEFT | VTOP,
+                                children = settings.children1,
+                            },
+                            {
+                                type = "rectangle",
+                                scrollBar = false,
+                                w = lvgl.PERCENT_SIZE + 40,
+                                h = lvgl.PERCENT_SIZE + 100,
+                                thickness = THICKNESS,
+                                flexFlow = lvgl.FLOW_COLUMN,
+                                align = LEFT | VTOP,
+                                children = settings.children2,
+                            },
+                        },
                     },
-                    {
-                        type = "rectangle",
-                        scrollBar = false,
-                        w = lvgl.PERCENT_SIZE + 40,
-                        h = lvgl.PERCENT_SIZE + 100,
-                        thickness = THICKNESS,
-                        flexFlow = lvgl.FLOW_COLUMN,
-                        children = settings.children2,
-                    },
+                    navigation(settings),
                 },
             },
         }
@@ -95,34 +155,38 @@ function wizard.page(settings)
                 flexFlow = lvgl.FLOW_COLUMN,
                 align = CENTER | VTOP,
                 backButton = true,
-                nextButton = {
-                    press = settings.nextFunc,
-                    active = function() return settings.hasNext end,
-                },
-                prevButton = {
-                    press = settings.previousFunc,
-                    active = function() return settings.hasPrevious end,
-                },
                 back = closeDialog,
                 children = {
                     {
                         type = "rectangle",
                         w = lvgl.PERCENT_SIZE + 100,
-                        h = lvgl.PERCENT_SIZE + 60,
+                        h = bodyH,
                         thickness = THICKNESS,
                         flexFlow = lvgl.FLOW_COLUMN,
                         align = LEFT | VTOP,
-                        children = settings.children1,
+                        children = {
+                            {
+                                type = "rectangle",
+                                w = lvgl.PERCENT_SIZE + 100,
+                                h = lvgl.PERCENT_SIZE + 60,
+                                thickness = THICKNESS,
+                                flexFlow = lvgl.FLOW_COLUMN,
+                                align = LEFT | VTOP,
+                                children = settings.children1,
+                            },
+                            {
+                                type = "rectangle",
+                                scrollBar = false,
+                                w = lvgl.PERCENT_SIZE + 100,
+                                h = lvgl.PERCENT_SIZE + 40,
+                                thickness = THICKNESS,
+                                flexFlow = lvgl.FLOW_COLUMN,
+                                align = LEFT | VTOP,
+                                children = settings.children2,
+                            },
+                        },
                     },
-                    {
-                        type = "rectangle",
-                        scrollBar = false,
-                        w = lvgl.PERCENT_SIZE + 100,
-                        h = lvgl.PERCENT_SIZE + 40,
-                        thickness = THICKNESS,
-                        flexFlow = lvgl.FLOW_COLUMN,
-                        children = settings.children2,
-                    },
+                    navigation(settings),
                 },
             },
         }
@@ -146,6 +210,7 @@ function wizard.settings(settings)
                     {
                         type = "label",
                         w = lvgl.PERCENT_SIZE + 100,
+                        color = WHITE,
                         text = settings.title,
                     },
                 },
@@ -180,6 +245,7 @@ function wizard.settingsVertical(settings)
                     {
                         type = "label",
                         w = lvgl.PERCENT_SIZE + 100,
+                        color = WHITE,
                         text = settings.title,
                     },
                 },
@@ -209,6 +275,7 @@ function wizard.summaryLine(title, chNum, text2)
             {
                 type = "label",
                 w = lvgl.PERCENT_SIZE + 100,
+                color = WHITE,
                 text = txt,
             },
         },
