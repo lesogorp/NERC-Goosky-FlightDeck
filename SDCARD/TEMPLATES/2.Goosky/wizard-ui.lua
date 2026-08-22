@@ -27,6 +27,7 @@
 --   * fixed-column review/summary rows for consistent alignment
 --   * responsive sizing for 480x320 (TX15/GX15) and 800x480 (TX16S MK3)
 --   * responsive model-image helper for Review / Confirm
+--   * filled body/panel rectangles so light EdgeTX themes cannot bleed through
 
 local wizard = {}
 
@@ -129,6 +130,7 @@ local function navigation(settings)
         w = lvgl.PERCENT_SIZE + 100,
         h = NAV_H,
         thickness = THICKNESS,
+        filled = true,
         color = BODY_COLOR,
         children = children,
     }
@@ -154,6 +156,7 @@ function wizard.page(settings)
                         w = lvgl.PERCENT_SIZE + 100,
                         h = bodyH,
                         thickness = THICKNESS,
+                        filled = true,
                         color = BODY_COLOR,
                         flexFlow = lvgl.FLOW_ROW,
                         align = LEFT | VTOP,
@@ -163,6 +166,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 60,
                                 h = lvgl.PERCENT_SIZE + 100,
                                 thickness = THICKNESS,
+                                filled = true,
                                 color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
@@ -174,6 +178,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 40,
                                 h = lvgl.PERCENT_SIZE + 100,
                                 thickness = THICKNESS,
+                                filled = true,
                                 color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
@@ -202,6 +207,7 @@ function wizard.page(settings)
                         w = lvgl.PERCENT_SIZE + 100,
                         h = bodyH,
                         thickness = THICKNESS,
+                        filled = true,
                         color = BODY_COLOR,
                         flexFlow = lvgl.FLOW_COLUMN,
                         align = LEFT | VTOP,
@@ -211,6 +217,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 100,
                                 h = lvgl.PERCENT_SIZE + 60,
                                 thickness = THICKNESS,
+                                filled = true,
                                 color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
@@ -222,6 +229,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 100,
                                 h = lvgl.PERCENT_SIZE + 40,
                                 thickness = THICKNESS,
+                                filled = true,
                                 color = BODY_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
@@ -242,6 +250,7 @@ function wizard.settings(settings)
         flexPad = 0,
         flexFlow = lvgl.FLOW_ROW,
         thickness = THICKNESS,
+        filled = true,
         color = BODY_COLOR,
         w = lvgl.PERCENT_SIZE + 100,
         visible = settings.visible,
@@ -249,6 +258,7 @@ function wizard.settings(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                filled = true,
                 color = BODY_COLOR,
                 w = lvgl.PERCENT_SIZE + 60,
                 children = {
@@ -264,6 +274,7 @@ function wizard.settings(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                filled = true,
                 color = BODY_COLOR,
                 w = lvgl.PERCENT_SIZE + 40,
                 flexFlow = lvgl.FLOW_ROW,
@@ -279,6 +290,7 @@ function wizard.settingsVertical(settings)
         type = "rectangle",
         flexPad = 0,
         thickness = THICKNESS,
+        filled = true,
         color = BODY_COLOR,
         w = lvgl.PERCENT_SIZE + 100,
         flexFlow = lvgl.FLOW_COLUMN,
@@ -288,6 +300,7 @@ function wizard.settingsVertical(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                filled = true,
                 color = BODY_COLOR,
                 w = lvgl.PERCENT_SIZE + 100,
                 children = {
@@ -303,6 +316,7 @@ function wizard.settingsVertical(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                filled = true,
                 color = BODY_COLOR,
                 flexFlow = lvgl.FLOW_ROW,
                 align = LEFT | VCENTER,
@@ -325,6 +339,7 @@ function wizard.summaryLine(title, chNum, text2)
         w = lvgl.PERCENT_SIZE + 100,
         h = SUMMARY_H,
         thickness = THICKNESS,
+        filled = true,
         color = BODY_COLOR,
         flexPad = 0,
         flexFlow = lvgl.FLOW_ROW,
@@ -335,6 +350,7 @@ function wizard.summaryLine(title, chNum, text2)
                 w = lvgl.PERCENT_SIZE + 42,
                 h = SUMMARY_H,
                 thickness = THICKNESS,
+                filled = true,
                 color = BODY_COLOR,
                 align = LEFT | VCENTER,
                 children = {
@@ -353,6 +369,7 @@ function wizard.summaryLine(title, chNum, text2)
                 w = lvgl.PERCENT_SIZE + 58,
                 h = SUMMARY_H,
                 thickness = THICKNESS,
+                filled = true,
                 color = BODY_COLOR,
                 align = LEFT | VCENTER,
                 children = {
