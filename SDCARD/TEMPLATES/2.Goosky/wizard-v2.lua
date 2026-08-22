@@ -1,12 +1,15 @@
 -- NERC Goosky BNF Wizard v1 diagnostic build
 -- EdgeTX 2.12 color radios
--- Switch capture is enabled. No ELRS check/fix and no model writes yet.
+-- Switch capture and Receiver ID allocation are enabled.
+-- No ELRS check/fix and no model writes yet.
 
 local RUN_DIR = "/TEMPLATES/2.Goosky"
 local IMAGE_DIR = "/IMAGES/"
+local MODELS_DIR = "/MODELS"
 local wizard = loadScript(RUN_DIR .. "/wizard-ui.lua")()
 
 local TITLE = "NERC Goosky BNF Wizard"
+local MAX_RECEIVER_ID = 63
 local page = 1
 local pages = {}
 
@@ -14,6 +17,14 @@ local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
 local standardColors = { "Orange", "Blue", "Purple" }
 local rs4VenomColors = { "Orange", "Green" }
 local timers = { "3:00", "3:30", "4:00", "4:30", "5:00", "5:30", "6:00" }
+
+-- Receiver ID is currently applicable only to the two verified native
+-- CRSF/ELRS profiles. The remaining aircraft stay selectable for UI testing,
+-- but their backend profiles are intentionally not enabled yet.
+local receiverIdModels = {
+    ["S1 V2"] = true,
+    ["S2 MAX"] = true,
+}
 
 local state = {
     model = 2,
@@ -29,6 +40,11 @@ local state = {
         active = nil,
         sources = {},
         snapshot = {},
+    },
+    receiver = {
+        id = nil,
+        status = "not-scanned",
+        scannedModels = 0,
     },
 }
 
@@ -148,8 +164,6 @@ local function buildSwitchSources()
         end
     end
 
-    -- Same fallback used by the proven GooskySetup tool if field discovery is
-    -- unavailable on a target radio.
     if #state.capture.sources == 0 then
         state.capture.sources = { "SA", "SB", "SC", "SD", "SE", "SF", "SG", "SH" }
     end
@@ -178,6 +192,139 @@ local function allSwitchesAssigned()
         and state.switches.bank ~= nil
         and state.switches.hold ~= nil
         and state.switches.reset ~= nil
+end
+
+local function receiverIdRequired()
+    return receiverIdModels[models[state.model]] == true
+end
+
+-- EdgeTX 2.12 stores receiver numbers under:
+-- header:
+--   modelId:
+--     0:
+--       val: <id>
+--     1:
+--       val: <id>
+-- Scan only that YAML block so unrelated "val" fields are ignored.
+local function scanModelIdsFromFile(path, used)
+    if not io or type(io.open) ~= "function" or type(io.read) ~= "function" then
+        return false
+    end
+
+    local f = io.open(path, "r")
+    if not f then return false end
+
+    local buffer = ""
+    local inModelId = false
+    local modelIdIndent = 0
+
+    local function processLine(line)
+        line = string.gsub(line, "\r$", "")
+        local indentText, body = string.match(line, "^(%s*)(.*)$")
+        indentText = indentText or ""
+        body = body or ""
+        local indent = #indentText
+        local trimmed = string.match(body, "^%s*(.-)%s*$") or body
+
+        if inModelId then
+            if trimmed ~= "" and indent <= modelIdIndent then
+                inModelId = false
+            else
+                local value = string.match(trimmed, "^val:%s*(%d+)")
+                if value then
+                    local id = tonumber(value)
+                    if id and id >= 0 and id <= MAX_RECEIVER_ID then
+                        used[id] = true
+                    end
+                end
+            end
+        end
+
+        if not inModelId and trimmed == "modelId:" then
+            inModelId = true
+            modelIdIndent = indent
+        end
+    end
+
+    while true do
+        local chunk = io.read(f, 512)
+        if not chunk or #chunk == 0 then break end
+        buffer = buffer .. chunk
+
+        while true do
+            local pos = string.find(buffer, "\n", 1, true)
+            if not pos then break end
+            processLine(string.sub(buffer, 1, pos - 1))
+            buffer = string.sub(buffer, pos + 1)
+        end
+    end
+
+    if #buffer > 0 then processLine(buffer) end
+    io.close(f)
+    return true
+end
+
+local function allocateReceiverId()
+    state.receiver.id = nil
+    state.receiver.scannedModels = 0
+
+    if type(dir) ~= "function" then
+        state.receiver.status = "scan-error"
+        return
+    end
+
+    local currentFilename = ""
+    if model and type(model.getInfo) == "function" then
+        local info = model.getInfo()
+        if info and type(info.filename) == "string" then
+            currentFilename = string.match(info.filename, "([^/\\]+)$") or info.filename
+        end
+    end
+
+    local used = {}
+    local scanOk = true
+
+    for filename in dir(MODELS_DIR) do
+        if type(filename) == "string"
+            and string.match(string.lower(filename), "%.yml$")
+            and filename ~= currentFilename then
+            local ok = scanModelIdsFromFile(MODELS_DIR .. "/" .. filename, used)
+            if ok then
+                state.receiver.scannedModels = state.receiver.scannedModels + 1
+            else
+                scanOk = false
+            end
+        end
+    end
+
+    if not scanOk then
+        state.receiver.status = "scan-error"
+        return
+    end
+
+    for id = 0, MAX_RECEIVER_ID do
+        if not used[id] then
+            state.receiver.id = id
+            state.receiver.status = "ok"
+            return
+        end
+    end
+
+    state.receiver.status = "full"
+end
+
+local function receiverIdDisplay()
+    if not receiverIdRequired() then return "N/A" end
+    if state.receiver.status == "ok" and state.receiver.id ~= nil then
+        return tostring(state.receiver.id) .. " AUTO"
+    end
+    if state.receiver.status == "full" then return "NONE FREE" end
+    return "SCAN ERROR"
+end
+
+local function receiverIdReady()
+    return (not receiverIdRequired())
+        or (state.receiver.status == "ok" and state.receiver.id ~= nil)
 end
 
 local function selectPage(step)
@@ -231,9 +378,6 @@ local function switchCaptureRow(row)
     local captureW = math.floor(LCD_W * (metrics.large and 0.60 or 0.62))
     local active = state.capture.active == row.key
 
-    -- Switch assignment controls intentionally use a fixed palette instead of
-    -- EdgeTX theme colors. Some stock light themes make secondary colors too
-    -- pale for a clear touch target. The rest of the page remains theme-aware.
     local buttonColor = active and ORANGE or DARKGREY
     local buttonTextColor = active and BLACK or WHITE
 
@@ -337,14 +481,11 @@ local function captureMovedSwitch()
 
     if not capturedName then return end
 
-    local position = positionFromValue(capturedValue)
     state.switches[key] = {
         name = capturedName,
-        position = position,
+        position = positionFromValue(capturedValue),
     }
 
-    -- End capture immediately. This deliberately ignores a spring return edge
-    -- on HOLD/RESET so a momentary switch cannot overwrite its trigger position.
     state.capture.active = nil
     switchPage()
 end
@@ -353,11 +494,15 @@ local function reviewPage()
     lvgl.clear()
     local colors = currentColors()
 
+    -- Re-scan immediately before Review so the displayed ID reflects the SD
+    -- card state at the point the user is about to confirm.
+    allocateReceiverId()
+
     lvgl.build(wizard.page({
         title = TITLE,
         subtitle = "Review / Confirm",
         hasPrevious = true,
-        hasNext = true,
+        hasNext = receiverIdReady(),
         previousLabel = "<  BACK",
         nextLabel = "CONFIRM",
         previousFunc = function() selectPage(-1) end,
@@ -365,6 +510,7 @@ local function reviewPage()
         children1 = {
             wizard.summaryLine("Model", nil, models[state.model]),
             wizard.summaryLine("Color", nil, colors[state.color]),
+            wizard.summaryLine("Receiver ID", nil, receiverIdDisplay()),
             wizard.summaryLine("Timer", nil, timers[state.timer]),
             wizard.summaryLine("ATTI", nil, assignmentDisplay("atti")),
             wizard.summaryLine("BANK", nil, assignmentDisplay("bank")),
@@ -389,11 +535,12 @@ local function completePage()
         children1 = {
             wizard.summaryLine("Model", nil, models[state.model]),
             wizard.summaryLine("Color", nil, colors[state.color]),
+            wizard.summaryLine("Receiver ID", nil, receiverIdDisplay()),
             wizard.summaryLine("ATTI", nil, assignmentDisplay("atti")),
             wizard.summaryLine("BANK", nil, assignmentDisplay("bank")),
             wizard.summaryLine("HOLD", nil, assignmentDisplay("hold")),
             wizard.summaryLine("RESET", nil, assignmentDisplay("reset")),
-            label("Switch capture flow confirmed. Hold [RTN] to exit."),
+            label("Receiver ID + switch flow confirmed. Hold [RTN] to exit."),
         },
         children2 = previewChildren(),
     }))
@@ -401,6 +548,7 @@ end
 
 local function init()
     buildSwitchSources()
+    allocateReceiverId()
     pages = { modelPage, switchPage, reviewPage, completePage }
     page = 1
     pages[page]()
