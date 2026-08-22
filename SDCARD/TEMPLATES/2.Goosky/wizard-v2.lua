@@ -10,7 +10,8 @@ local page = 1
 local pages = {}
 
 local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
-local colors = { "Orange", "Blue", "Purple" }
+local standardColors = { "Orange", "Blue", "Purple" }
+local rs4VenomColors = { "Orange", "Green" }
 local timers = { "3:00", "3:30", "4:00", "4:30", "5:00", "5:30", "6:00" }
 
 local state = {
@@ -18,6 +19,13 @@ local state = {
     color = 1,
     timer = 5,
 }
+
+local function currentColors()
+    if models[state.model] == "RS4 Venom" then
+        return rs4VenomColors
+    end
+    return standardColors
+end
 
 local function choiceRow(title, values, getter, setter)
     return wizard.settings({
@@ -52,6 +60,8 @@ end
 local function modelPage()
     lvgl.clear()
 
+    local colors = currentColors()
+
     lvgl.build(wizard.page({
         title = TITLE,
         subtitle = "Model Setup",
@@ -62,7 +72,15 @@ local function modelPage()
         children1 = {
             choiceRow("Goosky model", models,
                 function() return state.model end,
-                function(value) state.model = value end),
+                function(value)
+                    if state.model ~= value then
+                        state.model = value
+                        -- Color options are model-specific. Start at the first
+                        -- valid color whenever the aircraft is changed.
+                        state.color = 1
+                        modelPage()
+                    end
+                end),
             choiceRow("Color", colors,
                 function() return state.color end,
                 function(value) state.color = value end),
@@ -80,6 +98,8 @@ end
 
 local function reviewPage()
     lvgl.clear()
+
+    local colors = currentColors()
 
     lvgl.build(wizard.page({
         title = TITLE,
@@ -105,6 +125,8 @@ end
 
 local function completePage()
     lvgl.clear()
+
+    local colors = currentColors()
 
     lvgl.build(wizard.page({
         title = TITLE,
