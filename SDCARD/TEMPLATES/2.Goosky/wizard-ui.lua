@@ -10,18 +10,24 @@
 ---- # it under the terms of the GNU General Public License version 2 as     #
 ---- # published by the Free Software Foundation.                            #
 ---- #                                                                       #
+---- # This program is distributed in the hope that it will be useful        #
+---- # but WITHOUT ANY WARRANTY; without even the implied warranty of        #
+---- # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         #
+---- # GNU General Public License for more details.                          #
+---- #                                                                       #
 ---- #########################################################################
 
 -- Author: Alexander Gnauck
 -- Vendored from EdgeTX 2.12 wizard-ui.lua so the NERC Goosky wizard is self-contained.
 -- NERC changes:
 --   * theme-aware field/review text using EdgeTX COLOR_THEME_PRIMARY1
---   * native EdgeTX page/body background (no forced black panels)
+--   * native EdgeTX page/body background
 --   * large touch-friendly BACK / NEXT / CONFIRM buttons
 --   * no tiny stock previous/next page arrows
 --   * fixed-column review/summary rows for consistent alignment
 --   * responsive sizing for 480x320 (TX15/GX15) and 800x480 (TX16S MK3)
 --   * responsive model-image helper for Review / Confirm
+--   * full-width page helper for touch-first switch assignment
 
 local wizard = {}
 
@@ -33,8 +39,6 @@ local LARGE_LCD = LCD_W >= 700
 local THEME_TEXT = COLOR_THEME_PRIMARY1 or WHITE
 local PANEL_COLOR = DARKGREY
 
--- Explicit breakpoints are used for touch-target sizing. Field text stays at
--- the native EdgeTX size on both displays so long labels do not overflow.
 local NAV_H = LARGE_LCD and 84 or 60
 local BTN_W = LARGE_LCD and 200 or 140
 local BTN_H = LARGE_LCD and 64 or 52
@@ -128,100 +132,104 @@ local function navigation(settings)
     }
 end
 
+local function pageShell(settings, body)
+    return {
+        {
+            type = "page",
+            title = settings.title,
+            subtitle = settings.subtitle,
+            flexPad = 0,
+            flexFlow = lvgl.FLOW_COLUMN,
+            align = CENTER | VTOP,
+            backButton = true,
+            back = closeDialog,
+            children = {
+                body,
+                navigation(settings),
+            },
+        },
+    }
+end
+
 function wizard.page(settings)
     local bodyH = math.max(1, lvgl.PAGE_BODY_HEIGHT - NAV_H)
 
     if ORIENTATION == LANDSCAPE then
-        return {
-            {
-                type = "page",
-                title = settings.title,
-                subtitle = settings.subtitle,
-                flexPad = 0,
-                flexFlow = lvgl.FLOW_COLUMN,
-                align = CENTER | VTOP,
-                backButton = true,
-                back = closeDialog,
-                children = {
-                    {
-                        type = "rectangle",
-                        w = lvgl.PERCENT_SIZE + 100,
-                        h = bodyH,
-                        thickness = THICKNESS,
-                        flexFlow = lvgl.FLOW_ROW,
-                        align = LEFT | VTOP,
-                        children = {
-                            {
-                                type = "rectangle",
-                                w = lvgl.PERCENT_SIZE + 60,
-                                h = lvgl.PERCENT_SIZE + 100,
-                                thickness = THICKNESS,
-                                flexFlow = lvgl.FLOW_COLUMN,
-                                align = LEFT | VTOP,
-                                children = settings.children1,
-                            },
-                            {
-                                type = "rectangle",
-                                scrollBar = false,
-                                w = lvgl.PERCENT_SIZE + 40,
-                                h = lvgl.PERCENT_SIZE + 100,
-                                thickness = THICKNESS,
-                                flexFlow = lvgl.FLOW_COLUMN,
-                                align = LEFT | VTOP,
-                                children = settings.children2,
-                            },
-                        },
-                    },
-                    navigation(settings),
+        return pageShell(settings, {
+            type = "rectangle",
+            w = lvgl.PERCENT_SIZE + 100,
+            h = bodyH,
+            thickness = THICKNESS,
+            flexFlow = lvgl.FLOW_ROW,
+            align = LEFT | VTOP,
+            children = {
+                {
+                    type = "rectangle",
+                    w = lvgl.PERCENT_SIZE + 60,
+                    h = lvgl.PERCENT_SIZE + 100,
+                    thickness = THICKNESS,
+                    flexFlow = lvgl.FLOW_COLUMN,
+                    align = LEFT | VTOP,
+                    children = settings.children1,
+                },
+                {
+                    type = "rectangle",
+                    scrollBar = false,
+                    w = lvgl.PERCENT_SIZE + 40,
+                    h = lvgl.PERCENT_SIZE + 100,
+                    thickness = THICKNESS,
+                    flexFlow = lvgl.FLOW_COLUMN,
+                    align = LEFT | VTOP,
+                    children = settings.children2,
                 },
             },
-        }
-    else
-        return {
-            {
-                type = "page",
-                title = settings.title,
-                subtitle = settings.subtitle,
-                flexPad = 0,
-                flexFlow = lvgl.FLOW_COLUMN,
-                align = CENTER | VTOP,
-                backButton = true,
-                back = closeDialog,
-                children = {
-                    {
-                        type = "rectangle",
-                        w = lvgl.PERCENT_SIZE + 100,
-                        h = bodyH,
-                        thickness = THICKNESS,
-                        flexFlow = lvgl.FLOW_COLUMN,
-                        align = LEFT | VTOP,
-                        children = {
-                            {
-                                type = "rectangle",
-                                w = lvgl.PERCENT_SIZE + 100,
-                                h = lvgl.PERCENT_SIZE + 60,
-                                thickness = THICKNESS,
-                                flexFlow = lvgl.FLOW_COLUMN,
-                                align = LEFT | VTOP,
-                                children = settings.children1,
-                            },
-                            {
-                                type = "rectangle",
-                                scrollBar = false,
-                                w = lvgl.PERCENT_SIZE + 100,
-                                h = lvgl.PERCENT_SIZE + 40,
-                                thickness = THICKNESS,
-                                flexFlow = lvgl.FLOW_COLUMN,
-                                align = LEFT | VTOP,
-                                children = settings.children2,
-                            },
-                        },
-                    },
-                    navigation(settings),
-                },
-            },
-        }
+        })
     end
+
+    return pageShell(settings, {
+        type = "rectangle",
+        w = lvgl.PERCENT_SIZE + 100,
+        h = bodyH,
+        thickness = THICKNESS,
+        flexFlow = lvgl.FLOW_COLUMN,
+        align = LEFT | VTOP,
+        children = {
+            {
+                type = "rectangle",
+                w = lvgl.PERCENT_SIZE + 100,
+                h = lvgl.PERCENT_SIZE + 60,
+                thickness = THICKNESS,
+                flexFlow = lvgl.FLOW_COLUMN,
+                align = LEFT | VTOP,
+                children = settings.children1,
+            },
+            {
+                type = "rectangle",
+                scrollBar = false,
+                w = lvgl.PERCENT_SIZE + 100,
+                h = lvgl.PERCENT_SIZE + 40,
+                thickness = THICKNESS,
+                flexFlow = lvgl.FLOW_COLUMN,
+                align = LEFT | VTOP,
+                children = settings.children2,
+            },
+        },
+    })
+end
+
+-- Full-width content area used when large finger targets matter more than the
+-- normal 60/40 wizard split (for example, switch capture).
+function wizard.fullPage(settings)
+    local bodyH = math.max(1, lvgl.PAGE_BODY_HEIGHT - NAV_H)
+    return pageShell(settings, {
+        type = "rectangle",
+        w = lvgl.PERCENT_SIZE + 100,
+        h = bodyH,
+        thickness = THICKNESS,
+        flexFlow = lvgl.FLOW_COLUMN,
+        align = LEFT | VTOP,
+        children = settings.children,
+    })
 end
 
 function wizard.settings(settings)
@@ -349,7 +357,6 @@ function wizard.summaryLine(title, chNum, text2)
     }
 end
 
--- Based on the stock EdgeTX 2.12 wizard image helper.
 function wizard.image(settings)
     local border = IMAGE_PAD
     return {
