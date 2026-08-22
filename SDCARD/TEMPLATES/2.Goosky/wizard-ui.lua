@@ -21,6 +21,7 @@
 -- Vendored from EdgeTX 2.12 wizard-ui.lua so the NERC Goosky wizard is self-contained.
 -- NERC changes:
 --   * explicit high-contrast white labels
+--   * stable dark wizard body independent of the selected EdgeTX theme
 --   * large touch-friendly BACK / NEXT / CONFIRM buttons
 --   * no tiny stock previous/next page arrows
 --   * fixed-column review/summary rows for consistent alignment
@@ -33,6 +34,9 @@ local LANDSCAPE = 0
 local PORTRAIT = 1
 local ORIENTATION = (LCD_W > LCD_H) and LANDSCAPE or PORTRAIT
 local LARGE_LCD = LCD_W >= 700
+local BODY_COLOR = BLACK
+local PANEL_COLOR = BLACK
+local REVIEW_COLOR = DARKGREY
 
 -- Explicit breakpoints are more predictable than relying only on LCD_SCALE.
 -- 480x320: TX15 / GX15
@@ -120,6 +124,7 @@ local function navigation(settings)
         w = lvgl.PERCENT_SIZE + 100,
         h = NAV_H,
         thickness = THICKNESS,
+        color = BODY_COLOR,
         children = children,
     }
 end
@@ -144,6 +149,7 @@ function wizard.page(settings)
                         w = lvgl.PERCENT_SIZE + 100,
                         h = bodyH,
                         thickness = THICKNESS,
+                        color = BODY_COLOR,
                         flexFlow = lvgl.FLOW_ROW,
                         align = LEFT | VTOP,
                         children = {
@@ -152,6 +158,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 60,
                                 h = lvgl.PERCENT_SIZE + 100,
                                 thickness = THICKNESS,
+                                color = PANEL_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children1,
@@ -162,6 +169,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 40,
                                 h = lvgl.PERCENT_SIZE + 100,
                                 thickness = THICKNESS,
+                                color = PANEL_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children2,
@@ -189,6 +197,7 @@ function wizard.page(settings)
                         w = lvgl.PERCENT_SIZE + 100,
                         h = bodyH,
                         thickness = THICKNESS,
+                        color = BODY_COLOR,
                         flexFlow = lvgl.FLOW_COLUMN,
                         align = LEFT | VTOP,
                         children = {
@@ -197,6 +206,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 100,
                                 h = lvgl.PERCENT_SIZE + 60,
                                 thickness = THICKNESS,
+                                color = PANEL_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children1,
@@ -207,6 +217,7 @@ function wizard.page(settings)
                                 w = lvgl.PERCENT_SIZE + 100,
                                 h = lvgl.PERCENT_SIZE + 40,
                                 thickness = THICKNESS,
+                                color = PANEL_COLOR,
                                 flexFlow = lvgl.FLOW_COLUMN,
                                 align = LEFT | VTOP,
                                 children = settings.children2,
@@ -226,12 +237,14 @@ function wizard.settings(settings)
         flexPad = 0,
         flexFlow = lvgl.FLOW_ROW,
         thickness = THICKNESS,
+        color = PANEL_COLOR,
         w = lvgl.PERCENT_SIZE + 100,
         visible = settings.visible,
         children = {
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                color = PANEL_COLOR,
                 w = lvgl.PERCENT_SIZE + 60,
                 children = {
                     {
@@ -246,6 +259,7 @@ function wizard.settings(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                color = PANEL_COLOR,
                 w = lvgl.PERCENT_SIZE + 40,
                 flexFlow = lvgl.FLOW_ROW,
                 align = LEFT | VCENTER,
@@ -260,6 +274,7 @@ function wizard.settingsVertical(settings)
         type = "rectangle",
         flexPad = 0,
         thickness = THICKNESS,
+        color = PANEL_COLOR,
         w = lvgl.PERCENT_SIZE + 100,
         flexFlow = lvgl.FLOW_COLUMN,
         align = LEFT | VTOP,
@@ -268,6 +283,7 @@ function wizard.settingsVertical(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                color = PANEL_COLOR,
                 w = lvgl.PERCENT_SIZE + 100,
                 children = {
                     {
@@ -282,6 +298,7 @@ function wizard.settingsVertical(settings)
             {
                 type = "rectangle",
                 thickness = THICKNESS,
+                color = PANEL_COLOR,
                 flexFlow = lvgl.FLOW_ROW,
                 align = LEFT | VCENTER,
                 children = settings.children,
@@ -303,6 +320,7 @@ function wizard.summaryLine(title, chNum, text2)
         w = lvgl.PERCENT_SIZE + 100,
         h = SUMMARY_H,
         thickness = THICKNESS,
+        color = REVIEW_COLOR,
         flexPad = 0,
         flexFlow = lvgl.FLOW_ROW,
         align = LEFT | VCENTER,
@@ -312,6 +330,7 @@ function wizard.summaryLine(title, chNum, text2)
                 w = lvgl.PERCENT_SIZE + 42,
                 h = SUMMARY_H,
                 thickness = THICKNESS,
+                color = REVIEW_COLOR,
                 align = LEFT | VCENTER,
                 children = {
                     {
@@ -329,6 +348,7 @@ function wizard.summaryLine(title, chNum, text2)
                 w = lvgl.PERCENT_SIZE + 58,
                 h = SUMMARY_H,
                 thickness = THICKNESS,
+                color = REVIEW_COLOR,
                 align = LEFT | VCENTER,
                 children = {
                     {
