@@ -37,6 +37,7 @@ local function label(text)
     return {
         type = "label",
         w = lvgl.PERCENT_SIZE + 100,
+        color = WHITE,
         text = text,
     }
 end
@@ -56,6 +57,7 @@ local function modelPage()
         subtitle = "Model Setup",
         hasPrevious = false,
         hasNext = true,
+        nextLabel = "NEXT  >",
         nextFunc = function() selectPage(1) end,
         children1 = {
             choiceRow("Goosky model", models,
@@ -84,6 +86,8 @@ local function reviewPage()
         subtitle = "Review / Confirm",
         hasPrevious = true,
         hasNext = true,
+        previousLabel = "<  BACK",
+        nextLabel = "CONFIRM",
         previousFunc = function() selectPage(-1) end,
         nextFunc = function() selectPage(1) end,
         children1 = {
@@ -93,8 +97,8 @@ local function reviewPage()
         },
         children2 = {
             label("Review the selections."),
-            label("Press > to CONFIRM and continue."),
-            label("Press < to go back and make changes."),
+            label("Tap CONFIRM to continue."),
+            label("Tap BACK to make changes."),
         },
     }))
 end
@@ -107,6 +111,7 @@ local function completePage()
         subtitle = "Confirmed",
         hasPrevious = true,
         hasNext = false,
+        previousLabel = "<  BACK",
         previousFunc = function() selectPage(-1) end,
         children1 = {
             wizard.summaryLine("Model", nil, models[state.model]),
