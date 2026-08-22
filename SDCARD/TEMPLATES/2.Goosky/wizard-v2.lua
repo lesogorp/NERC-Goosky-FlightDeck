@@ -76,7 +76,7 @@ local function label(text)
     return {
         type = "label",
         w = lvgl.PERCENT_SIZE + 100,
-        color = WHITE,
+        color = wizard.textColor(),
         font = wizard.metrics().fieldFont,
         text = text,
     }
