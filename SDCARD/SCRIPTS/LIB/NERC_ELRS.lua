@@ -15,18 +15,12 @@ local READBACK_RETRY_DELAY = 100
 local RESCAN_RETRY_LIMIT = 2
 local RESCAN_DELAY = 100
 
--- Display/profile order remains user-facing and unchanged. Repair order is
--- deliberately separate: Model Match is repaired while the initial parameter
--- tree is still fresh. Packet Rate is left until the end because changing rate
--- can rebuild/reindex ELRS fields; Switch Mode is then refreshed and repaired.
+-- Profile order is also the repair order so the wizard fixes settings in the
+-- same top-to-bottom sequence shown to the user. Individual requirements can
+-- still declare related fields that must be refreshed after a change.
 local REQUIREMENT_ORDER = {
     "packetRate", "switchMode", "telemetry", "modelMatch",
     "maxPower", "dynamicPower", "antennaMode"
-}
-
-local REPAIR_KEY_ORDER = {
-    "modelMatch", "telemetry", "maxPower", "dynamicPower",
-    "antennaMode", "packetRate", "switchMode"
 }
 
 local function clean(value)
@@ -119,13 +113,7 @@ function M.new(options)
     local now_fn = options.getTime or getTime
     local profile, profile_error = normalize_profile(options.profile)
 
-    local repair_order = {}
-    if profile then
-        for _, key in ipairs(REPAIR_KEY_ORDER) do
-            local req = profile.requirements[key]
-            if req then repair_order[#repair_order + 1] = req end
-        end
-    end
+    local repair_order = profile and profile.ordered or {}
 
     local parameter_names = {}
     local parameter_seen = {}
