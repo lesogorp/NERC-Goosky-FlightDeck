@@ -2,7 +2,7 @@
 -- Initial port intentionally excludes ELRS check/fix logic.
 
 local RUN_DIR = "/TEMPLATES/2.Goosky"
-local wizard = loadScript(RUN_DIR .. "/wizard-v3.lua")()
+local wizard = loadScript(RUN_DIR .. "/wizard-v4.lua")()
 
 return {
     init = wizard.init,
