@@ -8,6 +8,7 @@ local AUTO_CFG_PREFIX = "/SCRIPTS/TOOLS/NERC_GSkyFD_"
 local LEGACY_AUTO_CFG_PREFIX = "/WIDGETS/NERC_GSkyFD/auto_"
 local TRIM_MODE_NONE = 31
 local FLIGHT_MODE_COUNT = 9
+local TIMER_MODE_SWITCH = 5
 
 local function clean(value)
     return string.gsub(tostring(value or ""), "[\r\n]", "")
@@ -215,11 +216,13 @@ local function apply(payload)
 
     local seconds = tonumber(payload.timerSeconds) or 300
     model.setTimer(0, {
-        mode = logicalFlight, start = seconds, value = seconds,
+        mode = TIMER_MODE_SWITCH, switch = logicalFlight,
+        start = seconds, value = seconds,
         countdownBeep = 2, minuteBeep = false, persistent = 0, name = "LIMIT"
     })
     model.setTimer(1, {
-        mode = logicalFlight, start = 0, value = 0,
+        mode = TIMER_MODE_SWITCH, switch = logicalFlight,
+        start = 0, value = 0,
         countdownBeep = 0, minuteBeep = false, persistent = 0, name = "FLIGHT"
     })
 
