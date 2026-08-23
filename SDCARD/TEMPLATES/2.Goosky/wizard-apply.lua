@@ -275,12 +275,19 @@ local function apply(payload)
     voice(12, poseSwitch, "sxrstb")
     voice(13, resetSwitch, "timrs1")
 
+    -- Generated Goosky ELRS models use the internal CRSF module only. Set the
+    -- subtype explicitly so a stale template/module value cannot survive, and
+    -- turn the external module off when this target exposes one.
     model.setModule(0, {
         Type = 5,
+        subType = 0,
         modelId = payload.receiverId,
         firstChannel = 0,
         channelsCount = 8
     })
+    if type(model.getModule) == "function" and model.getModule(1) ~= nil then
+        model.setModule(1, { Type = 0 })
+    end
 
     local info = model.getInfo()
     info.name = payload.modelName .. " " .. payload.color
