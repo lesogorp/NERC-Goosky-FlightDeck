@@ -8,13 +8,13 @@
 local M = {}
 
 local profiles = {
-    GOOSKY_SIMPLE_ELRS = {
-        id = "GOOSKY_SIMPLE_ELRS",
-        label = "Goosky Simplified ELRS FC",
+    GOOSKY_V2_FC = {
+        id = "GOOSKY_V2_FC",
+        label = "Goosky V2 Flight Controller",
         protocol = "ELRS",
         enabled = true,
         hardwareVerified = true,
-        controller = "Goosky simplified ELRS flight controller",
+        controller = "Goosky V2 flight controller",
         aircraft = {
             { make = "Goosky", model = "S1 V2" },
             { make = "Goosky", model = "S2 MAX" },
