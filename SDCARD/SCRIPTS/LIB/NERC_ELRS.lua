@@ -12,6 +12,8 @@ local DISCOVERY_WINDOW = 1200
 local DISCOVERY_INTERVAL = 100
 local READBACK_RETRY_LIMIT = 2
 local READBACK_RETRY_DELAY = 100
+local RESCAN_RETRY_LIMIT = 2
+local RESCAN_DELAY = 100
 
 local REQUIREMENT_ORDER = {
     "packetRate", "switchMode", "telemetry", "modelMatch",
@@ -313,6 +315,16 @@ function M.new(options)
         state.next_refresh = now + 500
     end
 
+    local function queue_full_rescan()
+        if state.fields_count <= 0 then return false end
+        state.settings = {}
+        state.field_ids = {}
+        local ids = {}
+        for id = 1, state.fields_count do ids[#ids + 1] = id end
+        queue_fields(ids, false)
+        return true
+    end
+
     local function reads_idle()
         return not state.current and state.queue_pos > #state.queue
     end
@@ -468,7 +480,11 @@ function M.new(options)
         for index = start or 1, #profile.ordered do
             local req = profile.ordered[index]
             local _, setting = setting_for(req)
-            if setting and not requirement_matches(req, setting.value) then return index end
+            if not setting then
+                if req.policy ~= "if-supported" then return index end
+            elseif not requirement_matches(req, setting.value) then
+                return index
+            end
         end
         return nil
     end
@@ -490,8 +506,8 @@ function M.new(options)
         if not index then return false, "NO ELRS SETTINGS NEED CHANGES" end
         local now = now_fn()
         state.fix = {
-            stage="set", index=index, deadline=now+4500,
-            next_action=now, write_retries=0, readback_retries=0,
+            stage="set", index=index, deadline=now+6000,
+            next_action=now, write_retries=0, readback_retries=0, rescan_retries=0,
             message="APPLYING SETTINGS", original=display_values(),
         }
         return true
@@ -506,6 +522,14 @@ function M.new(options)
         if state.connected then set_fix("error", "RECEIVER CONNECTED - CHANGE CANCELLED"); return end
         if not reads_idle() or now < (fix.next_action or 0) then return end
 
+        if fix.stage == "wait_rescan" then
+            fix.stage = "set"
+            fix.index = next_fix_index(1)
+            fix.next_action = now + 25
+            if not fix.index then set_fix("complete", "ALL SETTINGS VERIFIED") end
+            return
+        end
+
         local req = profile and profile.ordered[fix.index]
         if not req then set_fix("complete", "ALL SETTINGS VERIFIED"); return end
         local name, setting = setting_for(req)
@@ -513,6 +537,11 @@ function M.new(options)
             if req.policy == "if-supported" then
                 local next_index = next_fix_index(fix.index + 1)
                 if next_index then fix.index = next_index else set_fix("complete", "ALL SETTINGS VERIFIED") end
+            elseif (fix.rescan_retries or 0) < RESCAN_RETRY_LIMIT and queue_full_rescan() then
+                fix.rescan_retries = (fix.rescan_retries or 0) + 1
+                fix.stage = "wait_rescan"
+                fix.next_action = now + RESCAN_DELAY
+                fix.message = "REFRESHING ELRS SETTINGS"
             else
                 set_fix("error", "REQUIRED ELRS SETTING NOT FOUND: " .. tostring(req.parameter))
             end
@@ -551,7 +580,14 @@ function M.new(options)
 
         if fix.stage == "queue_readback" then
             if not queue_readback(fix.parameter) then
-                set_fix("error", "ELRS PARAMETER ID NOT AVAILABLE")
+                if (fix.rescan_retries or 0) < RESCAN_RETRY_LIMIT and queue_full_rescan() then
+                    fix.rescan_retries = (fix.rescan_retries or 0) + 1
+                    fix.stage = "wait_rescan"
+                    fix.next_action = now + RESCAN_DELAY
+                    fix.message = "REFRESHING ELRS SETTINGS"
+                else
+                    set_fix("error", "ELRS PARAMETER ID NOT AVAILABLE")
+                end
             else
                 fix.stage = "wait_readback"
             end
@@ -574,13 +610,20 @@ function M.new(options)
                 return
             end
             fix.readback_retries = 0
-            local next_index = next_fix_index(fix.index + 1)
-            if next_index then
-                fix.index = next_index
-                fix.stage = "set"
-                fix.next_action = now + 25
+            fix.rescan_retries = 0
+            if queue_full_rescan() then
+                fix.stage = "wait_rescan"
+                fix.next_action = now + RESCAN_DELAY
+                fix.message = "REFRESHING ELRS SETTINGS"
             else
-                set_fix("complete", "ALL SETTINGS VERIFIED")
+                local next_index = next_fix_index(1)
+                if next_index then
+                    fix.index = next_index
+                    fix.stage = "set"
+                    fix.next_action = now + 25
+                else
+                    set_fix("complete", "ALL SETTINGS VERIFIED")
+                end
             end
         end
     end
