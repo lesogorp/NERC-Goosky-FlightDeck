@@ -2,6 +2,7 @@
 -- Compact UI adapter around the shared profile-driven NERC_ELRS engine.
 
 local LIB_DIR = "/SCRIPTS/LIB"
+local ELRS_SIM_PATH = LIB_DIR .. "/NERC_ELRS_SIM.lua"
 
 local profilesLoader = loadScript(LIB_DIR .. "/NERC_RF_PROFILES.lua")
 local elrsLoader = loadScript(LIB_DIR .. "/NERC_ELRS.lua")
@@ -12,15 +13,15 @@ local profiles = profilesLoader()
 local elrsFactory = elrsLoader()
 profilesLoader=nil; elrsLoader=nil
 
--- The VS Code simulator task injects this development-only backend into the
--- simulator SD pack. It is intentionally absent from flight radios, so normal
--- hardware always uses the native EdgeTX CRSF transport.
+-- The VS Code simulator task injects a dedicated ELRS module backend here.
+-- It is separate from FlightDeck's telemetry sensor simulator and is absent
+-- from flight radios, where the native EdgeTX CRSF transport is always used.
 local simulation=nil
 do
-    local okLoader,simLoader=pcall(loadScript,"/WIDGETS/NERC_GSkyFD/simulator.lua")
+    local okLoader,simLoader=pcall(loadScript,ELRS_SIM_PATH)
     if okLoader and type(simLoader)=="function" then
         local okSim,sim=pcall(simLoader)
-        if okSim and type(sim)=="table" and sim.is_goosky_simulator then simulation=sim end
+        if okSim and type(sim)=="table" and sim.is_nerc_elrs_simulator then simulation=sim end
     end
 end
 
