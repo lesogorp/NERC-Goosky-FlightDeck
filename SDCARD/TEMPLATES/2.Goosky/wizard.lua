@@ -1,13 +1,13 @@
 -- NERC Goosky BNF Wizard v1
 -- EdgeTX 2.12 color radios
--- Hardware-validated low-latency switch capture and Receiver ID allocation.
+-- Hardware-validated switch capture, Receiver ID allocation and ELRS preflight.
 -- Programs verified S1 V2 / S2 MAX profiles only.
--- No ELRS operating-parameter validation or auto-fix logic.
 
 local RUN_DIR = "/TEMPLATES/2.Goosky"
 local IMAGE_DIR = "/IMAGES/"
 local MODELS_DIR = "/MODELS"
 local wizard = loadScript(RUN_DIR .. "/wizard-ui.lua")()
+local elrsStageFactory = loadScript(RUN_DIR .. "/wizard-elrs.lua")()
 
 local TITLE = "NERC Goosky BNF Wizard"
 local MAX_RECEIVER_ID = 63
@@ -20,7 +20,9 @@ local PROGRAMMING_LED_MIN_TICKS = 80
 local page = 1
 local pages = {}
 local switchPage
+local elrsPage
 local completePage
+local elrsStage=nil
 local wizardLedSignature = nil
 
 local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
@@ -208,9 +210,6 @@ end
 
 local function displayError()
     local message=tostring(state.apply.error or "Unknown error")
-    -- pcall errors often include /path/file.lua:line: before the useful text.
-    -- Strip that prefix for the small radio display while preserving the actual
-    -- failure reason the user needs to report.
     return string.match(message, ":%d+:%s*(.+)$") or message
 end
 
@@ -230,10 +229,7 @@ local function setLed(index,r,g,b)
 end
 
 local function clearWizardLeds()
-    if not ledAvailable() then
-        wizardLedSignature="off"
-        return
-    end
+    if not ledAvailable() then wizardLedSignature="off"; return end
     if wizardLedSignature=="off" then return end
     for index=0,LED_STRIP_LENGTH-1 do setLed(index,0,0,0) end
     pcall(applyRGBLedColors)
@@ -241,10 +237,7 @@ local function clearWizardLeds()
 end
 
 local function setStaticWizardLeds(mode)
-    if not ledAvailable() then
-        wizardLedSignature="static:"..mode
-        return
-    end
+    if not ledAvailable() then wizardLedSignature="static:"..mode; return end
     local signature="static:"..mode
     if wizardLedSignature==signature then return end
 
@@ -252,37 +245,26 @@ local function setStaticWizardLeds(mode)
     local ringR,ringG,ringB=0,0,0
     local buttonR,buttonG,buttonB=0,0,0
 
-    if mode=="setup" or mode=="review" then
+    if mode=="setup" or mode=="review" or mode=="elrs-check" then
         ringR,ringG,ringB=255,255,255
     elseif mode=="switch-waiting" then
         ringR=255
-    elseif mode=="switch-ready" then
+    elseif mode=="switch-ready" or mode=="elrs-ready" then
         ringG=255
     elseif mode=="success" then
-        ringG=255
-        buttonG=255
+        ringG=255; buttonG=255
     elseif mode=="error" then
-        ringR=255
-        buttonR=255
+        ringR=255; buttonR=255
     end
 
     for index=0,systemCount-1 do setLed(index,ringR,ringG,ringB) end
-    for segment=0,buttonCount-1 do
-        setLed(systemCount+segment,buttonR,buttonG,buttonB)
-    end
+    for segment=0,buttonCount-1 do setLed(systemCount+segment,buttonR,buttonG,buttonB) end
     pcall(applyRGBLedColors)
     wizardLedSignature=signature
 end
 
 local function updateProgrammingLeds()
-    if not ledAvailable() then
-        wizardLedSignature="programming"
-        return
-    end
-
-    -- Reuse the same red gimbal comet and SW1-SW6 Knight Rider timing used by
-    -- the FlightDeck splash so the wizard and dashboard share one visual
-    -- language instead of inventing a second animation.
+    if not ledAvailable() then wizardLedSignature="programming"; return end
     local systemCount,buttonCount=ledCounts()
     local now=getTime()
     local ringPhase=math.floor(now/8)
@@ -291,14 +273,11 @@ local function updateProgrammingLeds()
     if wizardLedSignature==signature then return end
 
     for index=0,LED_STRIP_LENGTH-1 do setLed(index,0,0,0) end
-
     local ringCount=systemCount>=20 and 2 or 1
     local ringStart=0
     local cometRed={255,110,35}
     for ring=1,ringCount do
-        local ringSize=ring==ringCount
-            and (systemCount-ringStart)
-            or math.floor(systemCount/ringCount)
+        local ringSize=ring==ringCount and (systemCount-ringStart) or math.floor(systemCount/ringCount)
         if ringSize>0 then
             local head=ringPhase%ringSize
             for tail=0,#cometRed-1 do
@@ -308,7 +287,6 @@ local function updateProgrammingLeds()
         end
         ringStart=ringStart+ringSize
     end
-
     if buttonCount==6 then
         local sweep={0,1,2,3,4,5,4,3,2,1}
         local head=sweep[(switchPhase%#sweep)+1]
@@ -318,7 +296,6 @@ local function updateProgrammingLeds()
             setLed(systemCount+segment,red,0,0)
         end
     end
-
     pcall(applyRGBLedColors)
     wizardLedSignature=signature
 end
@@ -332,9 +309,7 @@ local function cleanScalar(v)
     if not v then return nil end
     v = string.match(v, "^%s*(.-)%s*$") or v
     local first,last=string.sub(v,1,1),string.sub(v,-1)
-    if (first=='\"' and last=='\"') or (first=="'" and last=="'") then
-        v=string.sub(v,2,-2)
-    end
+    if (first=='\"' and last=='\"') or (first=="'" and last=="'") then v=string.sub(v,2,-2) end
     return v
 end
 
@@ -355,23 +330,16 @@ local function scanRfIdentity(path)
         spaces=spaces or ""; body=body or ""
         if body=="" then return end
         local indent=#spaces
-
         if section and indent<=sectionIndent then
             section=nil; slotActive=false; slotIndent=-1
         elseif section and slotActive and indent<=slotIndent then
             slotActive=false; slotIndent=-1
         end
-
         if not section then
-            if body=="modelId:" then
-                section="modelId"; sectionIndent=indent; return
-            elseif body=="moduleData:" then
-                section="moduleData"; sectionIndent=indent; return
-            else
-                return
-            end
+            if body=="modelId:" then section="modelId"; sectionIndent=indent; return
+            elseif body=="moduleData:" then section="moduleData"; sectionIndent=indent; return
+            else return end
         end
-
         if not slotActive then
             local slot=string.match(body,"^(%d+):$")
             if slot and tonumber(slot)==TARGET_MODULE_INDEX and indent>sectionIndent then
@@ -379,7 +347,6 @@ local function scanRfIdentity(path)
             end
             return
         end
-
         if section=="modelId" then
             local v=string.match(body,"^val:%s*(%d+)%s*$")
             if v then
@@ -401,12 +368,8 @@ local function scanRfIdentity(path)
         local start=1
         while true do
             local nl=string.find(buffer,"\n",start,true)
-            if not nl then
-                buffer=string.sub(buffer,start)
-                break
-            end
-            processLine(string.sub(buffer,start,nl-1))
-            start=nl+1
+            if not nl then buffer=string.sub(buffer,start); break end
+            processLine(string.sub(buffer,start,nl-1)); start=nl+1
         end
     end
     if #buffer>0 then processLine(buffer) end
@@ -415,17 +378,12 @@ local function scanRfIdentity(path)
 end
 
 local function markId(id)
-    if id<32 then
-        state.receiver.maskLo=bit32.bor(state.receiver.maskLo,bit32.lshift(1,id))
-    else
-        state.receiver.maskHi=bit32.bor(state.receiver.maskHi,bit32.lshift(1,id-32))
-    end
+    if id<32 then state.receiver.maskLo=bit32.bor(state.receiver.maskLo,bit32.lshift(1,id))
+    else state.receiver.maskHi=bit32.bor(state.receiver.maskHi,bit32.lshift(1,id-32)) end
 end
 
 local function idUsed(id)
-    if id<32 then
-        return bit32.band(state.receiver.maskLo,bit32.lshift(1,id))~=0
-    end
+    if id<32 then return bit32.band(state.receiver.maskLo,bit32.lshift(1,id))~=0 end
     return bit32.band(state.receiver.maskHi,bit32.lshift(1,id-32))~=0
 end
 
@@ -445,7 +403,6 @@ local function allocateReceiverId()
 
     local nextFile=dir(MODELS_DIR)
     if type(nextFile)~="function" then return end
-
     local filename=nextFile()
     while filename do
         if type(filename)=="string" and string.match(string.lower(filename),"%.yml$") and filename~=currentFilename then
@@ -459,13 +416,9 @@ local function allocateReceiverId()
         end
         filename=nextFile()
     end
-
     for id=1,MAX_RECEIVER_ID do if idUsed(id) then r.usedIds=r.usedIds+1 end end
-    for id=1,MAX_RECEIVER_ID do
-        if not idUsed(id) then r.id=id; r.status="ok"; break end
-    end
+    for id=1,MAX_RECEIVER_ID do if not idUsed(id) then r.id=id; r.status="ok"; break end end
     if r.id==nil then r.status="full" end
-    filename=nil; nextFile=nil
 end
 
 local function receiverIdDisplay()
@@ -478,6 +431,20 @@ end
 
 local function receiverIdReady()
     return (not receiverIdRequired()) or (state.receiver.status=="ok" and state.receiver.id~=nil)
+end
+
+local function ensureInternalElrsForCheck()
+    if not profileReady() then error("Selected model profile is not yet verified") end
+    if state.receiver.status~="ok" or not state.receiver.id then allocateReceiverId() end
+    if not receiverIdReady() then error("No valid Receiver ID is available") end
+    if not model or type(model.setModule)~="function" then error("EdgeTX module API unavailable") end
+    model.setModule(0, {
+        Type=5, subType=0, modelId=state.receiver.id,
+        firstChannel=0, channelsCount=8
+    })
+    if type(model.getModule)=="function" and model.getModule(1)~=nil then
+        model.setModule(1,{Type=0})
+    end
 end
 
 local function selectPage(step)
@@ -499,7 +466,10 @@ local function modelPage()
         children1={
             choiceRow("Goosky model",models,function() return state.model end,function(value)
                 if state.model~=value then
-                    state.model=value; state.color=1; state.apply.status="not-run"; modelPage()
+                    state.model=value; state.color=1; state.apply.status="not-run"
+                    state.receiver.id=nil; state.receiver.status="not-scanned"
+                    if elrsStage then elrsStage.reset() end
+                    modelPage()
                 end
             end),
             choiceRow("Color",colors,function() return state.color end,function(value)
@@ -511,7 +481,7 @@ local function modelPage()
         },
         children2={
             sideLabel("Select the helicopter, color and flight timer."),
-            sideLabel("Switches are assigned on the next page."),
+            sideLabel("Switches and RF settings are checked on the next pages."),
             sideLabel(profileReady() and "Verified profile: ready to configure." or "Profile visible for future support; programming is blocked."),
         },
     }))
@@ -536,10 +506,7 @@ local function switchCaptureRow(row)
                           color=function() return state.capture.active==key and ORANGE or DARKGREY end,
                           textColor=function() return state.capture.active==key and BLACK or WHITE end,
                           cornerRadius=metrics.large and 12 or 8,
-                          press=function()
-                              state.capture.active=key
-                              snapshotSwitches()
-                          end }} },
+                          press=function() state.capture.active=key; snapshotSwitches() end }} },
         },
     }
 end
@@ -552,17 +519,11 @@ switchPage=function()
     for i=1,#switchRows do children[#children+1]=switchCaptureRow(switchRows[i]) end
     children[#children+1]=label("Tap a box, then move only the switch you want to assign.")
     lvgl.build(wizard.fullPage({
-        title=TITLE, subtitle="Switch Assignment", hasPrevious=true,
-        hasNext=true,
+        title=TITLE, subtitle="Switch Assignment", hasPrevious=true, hasNext=true,
         previousLabel="<  BACK",
-        nextLabel=function()
-            if allSwitchesAssigned() and state.capture.active==nil then return "NEXT  >" end
-            return "ASSIGN"
-        end,
+        nextLabel=function() return (allSwitchesAssigned() and state.capture.active==nil) and "NEXT  >" or "ASSIGN" end,
         previousFunc=function() selectPage(-1) end,
-        nextFunc=function()
-            if allSwitchesAssigned() and state.capture.active==nil then selectPage(1) end
-        end,
+        nextFunc=function() if allSwitchesAssigned() and state.capture.active==nil then selectPage(1) end end,
         children=children,
     }))
 end
@@ -581,46 +542,40 @@ local function captureMovedSwitch()
     local key=c.active
     if not key then return end
     local now=getTime()
-
     if not c.candidateName then
         for i=1,#c.sources do
             local name=c.sources[i]
             local current=readPhysicalSwitch(name)
             local previous=c.snapshot[name]
             if current~=nil and previous~=nil and math.abs(current-previous)>256 then
-                c.candidateName=name
-                c.candidateInitial=positionFromValue(previous)
-                c.candidatePosition=positionFromValue(current)
-                c.candidateSince=now
-                break
+                c.candidateName=name; c.candidateInitial=positionFromValue(previous)
+                c.candidatePosition=positionFromValue(current); c.candidateSince=now; break
             end
             c.snapshot[name]=current
         end
         return
     end
-
     local current=readPhysicalSwitch(c.candidateName)
     if current==nil then return end
     local pos=positionFromValue(current)
     if pos~=c.candidatePosition then
         if (key=="hold" or key=="reset") and pos==c.candidateInitial then
-            finishCapture(c.candidateName,c.candidatePosition)
-            return
+            finishCapture(c.candidateName,c.candidatePosition); return
         end
-        c.candidatePosition=pos
-        c.candidateSince=now
-        return
+        c.candidatePosition=pos; c.candidateSince=now; return
     end
+    if now-c.candidateSince>=SWITCH_SETTLE_TICKS then finishCapture(c.candidateName,c.candidatePosition) end
+end
 
-    if now-c.candidateSince>=SWITCH_SETTLE_TICKS then
-        finishCapture(c.candidateName,c.candidatePosition)
-    end
+elrsPage=function()
+    setStaticWizardLeds("elrs-check")
+    if elrsStage then elrsStage.enter() end
 end
 
 local function reviewPage()
     lvgl.clear()
     setStaticWizardLeds("review")
-    if receiverIdRequired() then allocateReceiverId() end
+    if receiverIdRequired() and state.receiver.status~="ok" then allocateReceiverId() end
     local colors=currentColors()
     local children2=previewChildren()
     if profileReady() then
@@ -632,7 +587,7 @@ local function reviewPage()
 
     lvgl.build(wizard.page({
         title=TITLE, subtitle="Review / Confirm", hasPrevious=true,
-        hasNext=profileReady() and receiverIdReady(),
+        hasNext=profileReady() and receiverIdReady() and elrsStage and elrsStage.isReady(),
         previousLabel="<  BACK", nextLabel="CONFIRM",
         previousFunc=function() selectPage(-1) end,
         nextFunc=function() selectPage(1) end,
@@ -640,6 +595,7 @@ local function reviewPage()
             wizard.summaryLine("Model",nil,models[state.model]),
             wizard.summaryLine("Color",nil,colors[state.color]),
             wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
+            wizard.summaryLine("RF Profile",nil,(elrsStage and elrsStage.getProfileId()) or "N/A"),
             wizard.summaryLine("Timer",nil,timers[state.timer]),
             wizard.summaryLine("ATTI",nil,assignmentDisplay("atti")),
             wizard.summaryLine("BANK",nil,assignmentDisplay("bank")),
@@ -652,46 +608,26 @@ end
 
 local function runApplyBackend()
     if state.apply.status=="success" then return true end
-    state.apply.status="running"
-    state.apply.error=nil
-
+    state.apply.status="running"; state.apply.error=nil
     if type(collectgarbage)=="function" then collectgarbage("collect") end
     local loader=loadScript(RUN_DIR .. "/wizard-apply.lua")
-    if type(loader)~="function" then
-        state.apply.status="failed"
-        state.apply.error="Cannot load wizard-apply.lua"
-        return false
-    end
-
-    local apply=loader()
-    loader=nil
-    if type(apply)~="function" then
-        state.apply.status="failed"
-        state.apply.error="Invalid wizard apply backend"
-        return false
-    end
-
+    if type(loader)~="function" then state.apply.status="failed"; state.apply.error="Cannot load wizard-apply.lua"; return false end
+    local apply=loader(); loader=nil
+    if type(apply)~="function" then state.apply.status="failed"; state.apply.error="Invalid wizard apply backend"; return false end
     local payload={
-        modelName=models[state.model],
-        color=currentColors()[state.color],
-        timerSeconds=timerSeconds[state.timer],
-        receiverId=state.receiver.id,
-        atti=state.switches.atti,
-        bank=state.switches.bank,
-        hold=state.switches.hold,
-        reset=state.switches.reset,
+        modelName=models[state.model], color=currentColors()[state.color],
+        timerSeconds=timerSeconds[state.timer], receiverId=state.receiver.id,
+        rfProfile=(elrsStage and elrsStage.getProfileId()) or nil,
+        atti=state.switches.atti, bank=state.switches.bank,
+        hold=state.switches.hold, reset=state.switches.reset,
     }
     local ok,result=pcall(apply,payload)
     apply=nil; payload=nil
     if type(collectgarbage)=="function" then collectgarbage("collect") end
-
     if not ok then
-        state.apply.status="failed"
-        state.apply.error=tostring(result or "Unknown model programming error")
-        return false
+        state.apply.status="failed"; state.apply.error=tostring(result or "Unknown model programming error"); return false
     end
-    state.apply.status="success"
-    return true
+    state.apply.status="success"; return true
 end
 
 local function programmingPage()
@@ -701,8 +637,7 @@ local function programmingPage()
     children2[#children2+1]=sideLabel("PROGRAMMING MODEL...")
     children2[#children2+1]=sideLabel("Please wait. Do not exit the wizard.")
     lvgl.build(wizard.page({
-        title=TITLE, subtitle="Programming",
-        hasPrevious=false, hasNext=false,
+        title=TITLE, subtitle="Programming", hasPrevious=false, hasNext=false,
         children1={
             wizard.summaryLine("Model",nil,models[state.model]),
             wizard.summaryLine("Color",nil,colors[state.color]),
@@ -715,23 +650,15 @@ end
 
 completePage=function()
     if state.apply.status=="not-run" then
-        if not profileReady() then
-            state.apply.status="failed"
-            state.apply.error="Selected model profile is not yet verified"
-        elseif not receiverIdReady() then
-            state.apply.status="failed"
-            state.apply.error="No valid Receiver ID is available"
+        if not profileReady() then state.apply.status="failed"; state.apply.error="Selected model profile is not yet verified"
+        elseif not receiverIdReady() then state.apply.status="failed"; state.apply.error="No valid Receiver ID is available"
+        elseif not elrsStage or not elrsStage.isReady() then state.apply.status="failed"; state.apply.error="ELRS settings are not verified"
         else
-            state.apply.status="pending"
-            state.apply.startedAt=getTime()
-            programmingPage()
-            updateProgrammingLeds()
-            return
+            state.apply.status="pending"; state.apply.startedAt=getTime()
+            programmingPage(); updateProgrammingLeds(); return
         end
     elseif state.apply.status=="pending" or state.apply.status=="running" then
-        programmingPage()
-        updateProgrammingLeds()
-        return
+        programmingPage(); updateProgrammingLeds(); return
     end
 
     lvgl.clear()
@@ -741,7 +668,6 @@ completePage=function()
     local children1
     local children2=previewChildren()
     children2[#children2+1]=sideLabel(ok and "MODEL PROGRAMMED" or "PROGRAMMING FAILED")
-
     if ok then
         children1={
             wizard.summaryLine("Model",nil,models[state.model]),
@@ -756,39 +682,35 @@ completePage=function()
         children2[#children2+1]=sideLabel("Verify controls, HOLD, banks and ATT before flight.")
         children2[#children2+1]=sideLabel("Discover telemetry with the receiver powered and linked.")
     else
-        -- Put the actual exception at the top of the main pane. The previous
-        -- right-pane-only error could be clipped on 480x320 displays.
         children1={
-            label("PROGRAMMING FAILED"),
-            label(displayError()),
+            label("PROGRAMMING FAILED"), label(displayError()),
             wizard.summaryLine("Model",nil,models[state.model]),
             wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
         }
         children2[#children2+1]=sideLabel("Use BACK to correct the setup and retry.")
     end
-
     lvgl.build(wizard.page({
         title=TITLE, subtitle=ok and "Complete" or "Error",
         hasPrevious=not ok, hasNext=false,
         previousLabel="<  BACK", previousFunc=function()
-            state.apply.status="not-run"
-            state.apply.error=nil
-            state.apply.startedAt=0
-            selectPage(-1)
+            state.apply.status="not-run"; state.apply.error=nil; state.apply.startedAt=0; selectPage(-1)
         end,
-        children1=children1,
-        children2=children2,
+        children1=children1, children2=children2,
     }))
 end
 
 local function init()
     buildSwitchSources()
-    pages={modelPage,switchPage,reviewPage,completePage}
-    page=1
-    wizardLedSignature=nil
-    state.apply.status="not-run"
-    state.apply.error=nil
-    state.apply.startedAt=0
+    elrsStage=elrsStageFactory.new({
+        wizard=wizard, title=TITLE,
+        getModelName=function() return models[state.model] end,
+        ensureModule=ensureInternalElrsForCheck,
+        goBack=function() selectPage(-1) end,
+        goNext=function() selectPage(1) end,
+    })
+    pages={modelPage,switchPage,elrsPage,reviewPage,completePage}
+    page=1; wizardLedSignature=nil
+    state.apply.status="not-run"; state.apply.error=nil; state.apply.startedAt=0
     pages[1]()
 end
 
@@ -800,42 +722,32 @@ local function run(event,touchState)
         local ready=allSwitchesAssigned() and state.capture.active==nil
         setStaticWizardLeds(ready and "switch-ready" or "switch-waiting")
     elseif page==3 then
-        setStaticWizardLeds("review")
+        if elrsStage then elrsStage.update() end
+        setStaticWizardLeds(elrsStage and elrsStage.isReady() and "elrs-ready" or "elrs-check")
     elseif page==4 then
+        setStaticWizardLeds("review")
+    elseif page==5 then
         if state.apply.status=="pending" then
             updateProgrammingLeds()
-            if getTime()-state.apply.startedAt>=PROGRAMMING_LED_MIN_TICKS then
-                runApplyBackend()
-                completePage()
-            end
-        elseif state.apply.status=="running" then
-            updateProgrammingLeds()
-        elseif state.apply.status=="success" then
-            setStaticWizardLeds("success")
-        elseif state.apply.status=="failed" then
-            setStaticWizardLeds("error")
-        end
+            if getTime()-state.apply.startedAt>=PROGRAMMING_LED_MIN_TICKS then runApplyBackend(); completePage() end
+        elseif state.apply.status=="running" then updateProgrammingLeds()
+        elseif state.apply.status=="success" then setStaticWizardLeds("success")
+        elseif state.apply.status=="failed" then setStaticWizardLeds("error") end
     end
 
     if event==EVT_VIRTUAL_PREV_PAGE and page>1 then
-        if page~=4 or state.apply.status=="failed" then
+        if page~=5 or state.apply.status=="failed" then
             killEvents(event)
-            if page==4 then
-                state.apply.status="not-run"
-                state.apply.error=nil
-                state.apply.startedAt=0
-            end
+            if page==5 then state.apply.status="not-run"; state.apply.error=nil; state.apply.startedAt=0 end
             selectPage(-1)
         end
     elseif event==EVT_VIRTUAL_NEXT_PAGE and page<#pages then
-        if page~=2 or (allSwitchesAssigned() and state.capture.active==nil) then
-            killEvents(event); selectPage(1)
-        end
+        local canAdvance=true
+        if page==2 then canAdvance=allSwitchesAssigned() and state.capture.active==nil
+        elseif page==3 then canAdvance=elrsStage and elrsStage.isReady() end
+        if canAdvance then killEvents(event); selectPage(1) end
     end
-    if wizard.exitWizard() then
-        clearWizardLeds()
-        return 2
-    end
+    if wizard.exitWizard() then clearWizardLeds(); return 2 end
     return 0
 end
 
