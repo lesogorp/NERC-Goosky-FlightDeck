@@ -9,7 +9,8 @@
    correct EdgeTX screen-size SD pack, injects `dev/simulator.lua`, closes the
    previous EdgeTX simulator instance, and launches a fresh simulator.
 5. Use `EdgeTX: Simulate GX15` from **Tasks: Run Task** for the compact-radio
-   target.
+   target. On official Companion 2.12 builds without a GX15 simulator target,
+   this task uses the TX15 480x320 simulator as the UI/layout proxy.
 6. Test safety-sensitive behavior on the physical radio with the motor
    disconnected or the blades removed.
 7. Build the install ZIP with `bash tools/build-release.sh`.
@@ -21,8 +22,9 @@ See [TESTING.md](TESTING.md) for simulator and hardware-test details.
 The VS Code tasks launch EdgeTX's standalone `simulator.exe`; Companion does
 not need to be clicked manually for each test run.
 
-1. In EdgeTX Companion, create radio profiles for the targets you want to run.
-   The example configuration expects profiles named `NERC MK3` and `NERC GX15`.
+1. Create/select a Companion profile for simulator state. The supplied example
+   uses numeric profile ID `0`, which avoids workstation-specific profile-name
+   mismatches. The simulator help screen lists the available profile IDs.
 2. Keep the official EdgeTX simulator SD packs separated by LCD family. The
    default local example maps:
    - `C:\Temp\EdgeTXSIM\c800x480` -> TX16S MK3
@@ -35,11 +37,12 @@ not need to be clicked manually for each test run.
    local path differs from `C:\Temp\EdgeTXSIM`.
 5. Set `simulatorExe` if automatic discovery does not find the Companion 2.12
    `simulator.exe` installation.
-6. Change the `mk3` / `gx15` profile names in the JSON if your Companion profile
-   names differ.
+6. Normally leave profile `0` in place. The example explicitly selects
+   `edgetx-tx16smk3` for the 800x480 task and `edgetx-tx15` for the compact
+   480x320 task.
 
 `dev/simulator.local.json` is intentionally ignored by Git so workstation paths
-and profile names do not enter the repository.
+and profile choices do not enter the repository.
 
 Available VS Code tasks:
 
@@ -47,12 +50,14 @@ Available VS Code tasks:
 - `EdgeTX: Sync MK3 simulator SD` - merge into `c800x480` without launching.
 - `EdgeTX: Sync GX15 simulator SD` - merge into `c480x320` without launching.
 - `EdgeTX: Simulate TX16S MK3` - tests, sync `c800x480`, then launch MK3.
-- `EdgeTX: Simulate GX15` - tests, sync `c480x320`, then launch GX15.
+- `EdgeTX: Simulate GX15` - tests, sync `c480x320`, then launch the compact
+  simulator target.
 
-If the installed Companion build does not contain a GX15 simulator target, point
-`simulatorExe` at a self-built EdgeTX simulator that includes GX15, or use a
-TX15-class 480x320 simulator profile for UI checks and retain GX15 hardware
-validation for target-specific behavior.
+If the installed Companion build does not contain a GX15 simulator target,
+`edgetx-tx15` is the intended 480x320 UI/layout proxy. Point `simulatorExe` at a
+self-built EdgeTX simulator containing GX15 only when exact GX15 target behavior
+is required. Physical GX15 validation remains authoritative for target-specific
+behavior.
 
 ## Branch and pull-request flow
 
@@ -83,4 +88,3 @@ Evidence: photo/log
 ```
 
 Never merge a safety-related change solely because the desktop mock passes.
-
