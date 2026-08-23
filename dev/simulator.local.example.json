@@ -1,16 +1,18 @@
 {
   "simulatorExe": "",
-  "sdPath": "C:\\EdgeTX\\NERC-Simulator-SD",
+  "sdRoot": "C:\\Temp\\EdgeTXSIM",
   "stopExisting": true,
   "injectTelemetrySimulation": true,
   "targets": {
     "mk3": {
       "profile": "NERC MK3",
-      "radio": ""
+      "radio": "",
+      "sdFolder": "c800x480"
     },
     "gx15": {
       "profile": "NERC GX15",
-      "radio": ""
+      "radio": "",
+      "sdFolder": "c480x320"
     }
   }
 }
