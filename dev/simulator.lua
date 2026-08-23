@@ -105,9 +105,23 @@ local elrsBackendLoaded = false
 local function getElrsBackend()
     if elrsBackendLoaded then return elrsBackend end
     elrsBackendLoaded = true
-    if type(loadScript) ~= "function" then return nil end
-    local okLoader, loader = pcall(loadScript, "/SCRIPTS/LIB/NERC_ELRS_SIM.lua")
-    if not okLoader or type(loader) ~= "function" then return nil end
+
+    local loader = nil
+    if type(loadScript) == "function" then
+        local okLoader, candidate = pcall(loadScript, "/SCRIPTS/LIB/NERC_ELRS_SIM.lua")
+        if okLoader and type(candidate) == "function" then loader = candidate end
+    end
+
+    -- Desktop Lua regression tests do not mount the simulated SD card, but
+    -- they do provide loadfile(). Use the same dedicated ELRS simulator source
+    -- directly there. EdgeTX/Companion never needs this fallback because the
+    -- VS Code launcher injects NERC_ELRS_SIM.lua into the simulator SD pack.
+    if not loader and type(loadfile) == "function" then
+        local okLocal, candidate = pcall(loadfile, "dev/elrs-simulator.lua")
+        if okLocal and type(candidate) == "function" then loader = candidate end
+    end
+
+    if not loader then return nil end
     local okBackend, backend = pcall(loader)
     if okBackend and type(backend) == "table" and backend.is_nerc_elrs_simulator then
         elrsBackend = backend
