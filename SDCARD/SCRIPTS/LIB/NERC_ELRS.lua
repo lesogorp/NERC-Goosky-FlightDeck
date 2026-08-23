@@ -27,6 +27,11 @@ local function clean(value)
     return before or value
 end
 
+local function parameter_label(parameter)
+    if type(parameter) == "table" then return table.concat(parameter, "/") end
+    return tostring(parameter or "?")
+end
+
 local MATCHERS = {
     exact = function(value, target) return clean(value) == clean(target) end,
     case_insensitive = function(value, target)
@@ -217,7 +222,7 @@ function M.new(options)
             for _, req in ipairs(profile.ordered) do
                 local _, setting = setting_for(req)
                 if not setting and req.policy ~= "if-supported" then
-                    missing[#missing + 1] = tostring(req.parameter)
+                    missing[#missing + 1] = parameter_label(req.parameter)
                 end
             end
         end
@@ -230,8 +235,6 @@ function M.new(options)
         local field_count = data[offset + 12] or 0
         state.device_found = true
         state.device_name = device_name or "ELRS TX"
-        -- Match official ELRS Lua behavior: discovery from 0xEA, parameter
-        -- traffic from the dedicated ELRS Lua handset address 0xEF.
         state.handset_id = CRSF_ELRS_LUA
         state.transport_error = nil
         if field_count <= 0 or field_count == state.fields_count then return end
@@ -319,6 +322,7 @@ function M.new(options)
         if state.fields_count <= 0 then return false end
         state.settings = {}
         state.field_ids = {}
+        state.transport_error = nil
         local ids = {}
         for id = 1, state.fields_count do ids[#ids + 1] = id end
         queue_fields(ids, false)
@@ -368,7 +372,10 @@ function M.new(options)
             sent = submitted
         end
 
-        if state.device_found and not state.current and state.queue_pos > #state.queue then
+        -- Initial discovery owns scan_complete / ELRS READ INCOMPLETE. Repair
+        -- rescans are intentionally handled by process_fix() so a partial
+        -- transient rescan cannot abort the remaining repair sequence.
+        if not fix_active and state.device_found and not state.current and state.queue_pos > #state.queue then
             if state.initial_scan then
                 state.initial_scan = false
                 if target_complete() and (state.status_seen or now >= state.status_deadline) then
@@ -457,7 +464,7 @@ function M.new(options)
                 end
             elseif state.scan_complete and req.policy ~= "if-supported" then
                 list[#list + 1] = {
-                    key=req.key, parameter=tostring(req.parameter), current="NOT FOUND",
+                    key=req.key, parameter=parameter_label(req.parameter), current="NOT FOUND",
                     target=req.display or req.target, policy=req.policy, missing=true,
                 }
             end
@@ -505,6 +512,7 @@ function M.new(options)
         local index = next_fix_index(1)
         if not index then return false, "NO ELRS SETTINGS NEED CHANGES" end
         local now = now_fn()
+        state.transport_error = nil
         state.fix = {
             stage="set", index=index, deadline=now+6000,
             next_action=now, write_retries=0, readback_retries=0, rescan_retries=0,
@@ -543,7 +551,7 @@ function M.new(options)
                 fix.next_action = now + RESCAN_DELAY
                 fix.message = "REFRESHING ELRS SETTINGS"
             else
-                set_fix("error", "REQUIRED ELRS SETTING NOT FOUND: " .. tostring(req.parameter))
+                set_fix("error", "REQUIRED ELRS SETTING NOT FOUND: " .. parameter_label(req.parameter))
             end
             return
         end
