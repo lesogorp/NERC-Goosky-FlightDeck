@@ -595,7 +595,6 @@ local function reviewPage()
             wizard.summaryLine("Model",nil,models[state.model]),
             wizard.summaryLine("Color",nil,colors[state.color]),
             wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
-            wizard.summaryLine("RF Profile",nil,(elrsStage and elrsStage.getProfileId()) or "N/A"),
             wizard.summaryLine("Timer",nil,timers[state.timer]),
             wizard.summaryLine("ATTI",nil,assignmentDisplay("atti")),
             wizard.summaryLine("BANK",nil,assignmentDisplay("bank")),
