@@ -10,6 +10,8 @@ local CRSF_ELRS_LUA = 0xEF
 local CRSF_ELRS_TX = 0xEE
 local DISCOVERY_WINDOW = 1200
 local DISCOVERY_INTERVAL = 100
+local READBACK_RETRY_LIMIT = 2
+local READBACK_RETRY_DELAY = 100
 
 local REQUIREMENT_ORDER = {
     "packetRate", "switchMode", "telemetry", "modelMatch",
@@ -489,8 +491,8 @@ function M.new(options)
         local now = now_fn()
         state.fix = {
             stage="set", index=index, deadline=now+4500,
-            next_action=now, write_retries=0, message="APPLYING SETTINGS",
-            original=display_values(),
+            next_action=now, write_retries=0, readback_retries=0,
+            message="APPLYING SETTINGS", original=display_values(),
         }
         return true
     end
@@ -520,7 +522,12 @@ function M.new(options)
         if fix.stage == "set" then
             if requirement_matches(req, setting.value) then
                 local next_index = next_fix_index(fix.index + 1)
-                if next_index then fix.index = next_index else set_fix("complete", "ALL SETTINGS VERIFIED") end
+                if next_index then
+                    fix.index = next_index
+                    fix.readback_retries = 0
+                else
+                    set_fix("complete", "ALL SETTINGS VERIFIED")
+                end
                 return
             end
             local target = find_target(name, req)
@@ -532,6 +539,7 @@ function M.new(options)
                 fix.message = "SETTING " .. tostring(req.display or req.target) .. " - CRSF BUSY"
             else
                 fix.write_retries = 0
+                fix.readback_retries = 0
                 state.settings[name] = nil
                 fix.parameter = name
                 fix.stage = "queue_readback"
@@ -554,9 +562,18 @@ function M.new(options)
             local _, readback = setting_for(req)
             if not readback then return end
             if not requirement_matches(req, readback.value) then
+                if (fix.readback_retries or 0) < READBACK_RETRY_LIMIT then
+                    fix.readback_retries = (fix.readback_retries or 0) + 1
+                    state.settings[fix.parameter] = nil
+                    fix.stage = "queue_readback"
+                    fix.next_action = now + READBACK_RETRY_DELAY
+                    fix.message = "VERIFYING " .. tostring(req.display or req.target)
+                    return
+                end
                 set_fix("error", tostring(req.display or req.target) .. " CHANGE REJECTED")
                 return
             end
+            fix.readback_retries = 0
             local next_index = next_fix_index(fix.index + 1)
             if next_index then
                 fix.index = next_index
