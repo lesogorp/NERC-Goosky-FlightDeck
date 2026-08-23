@@ -1,6 +1,6 @@
 -- NERC shared ExpressLRS settings engine
 -- EdgeTX 2.12 / ExpressLRS 3.x transport and verified parameter repair.
--- UI-agnostic: used by the Goosky FlightDeck widget and native model wizard.
+-- UI-agnostic and profile-driven. RF policy comes from NERC_RF_PROFILES.lua.
 
 local M = {}
 
@@ -11,19 +11,9 @@ local CRSF_ELRS_TX = 0xEE
 local DISCOVERY_WINDOW = 1200
 local DISCOVERY_INTERVAL = 100
 
-local PARAMETER_NAMES = {
-    "Packet Rate", "Telem Ratio", "Switch Mode", "Model Match",
-    "Max Power", "Dynamic", "Dynamic Power", "Antenna Mode"
-}
-
-local RECOMMENDED = {
-    rate = "333Hz Full",
-    channels = "8ch",
-    telemetry = "1:32",
-    modelMatch = "On",
-    power = "100mW",
-    dynamic = "Off",
-    antenna = "Switch"
+local REQUIREMENT_ORDER = {
+    "packetRate", "switchMode", "telemetry", "modelMatch",
+    "maxPower", "dynamicPower", "antennaMode"
 }
 
 local function clean(value)
@@ -33,24 +23,24 @@ local function clean(value)
     return before or value
 end
 
-local function rate_ok(value)
-    local lower = string.lower(clean(value))
-    return string.find(lower, "333", 1, true) ~= nil
-        and string.find(lower, "full", 1, true) ~= nil
-end
-
-local function switch_ok(value)
-    local lower = string.lower(clean(value))
-    return lower == "8ch" or string.match(lower, "^8ch[%s%-]") ~= nil
-end
-
-local function telem_ok(value) return clean(value) == "1:32" end
-local function model_match_ok(value) return string.lower(clean(value)) == "on" end
-local function dynamic_ok(value) return string.lower(clean(value)) == "off" end
-local function antenna_ok(value) return string.lower(clean(value)) == "switch" end
-local function power_ok(value)
-    return tonumber(string.match(clean(value), "%d+")) == 100
-end
+local MATCHERS = {
+    exact = function(value, target) return clean(value) == clean(target) end,
+    case_insensitive = function(value, target)
+        return string.lower(clean(value)) == string.lower(clean(target))
+    end,
+    ["333_full"] = function(value)
+        local lower = string.lower(clean(value))
+        return string.find(lower, "333", 1, true) ~= nil
+            and string.find(lower, "full", 1, true) ~= nil
+    end,
+    ["8ch_full"] = function(value)
+        local lower = string.lower(clean(value))
+        return lower == "8ch" or string.match(lower, "^8ch[%s%-]") ~= nil
+    end,
+    numeric_100 = function(value)
+        return tonumber(string.match(clean(value), "%d+")) == 100
+    end,
+}
 
 local function read_cstring(data, offset)
     local chars = {}
@@ -73,11 +63,57 @@ local function split_options(raw)
     return values
 end
 
+local function copy_requirement(req)
+    local out = {}
+    for k, v in pairs(req or {}) do out[k] = v end
+    return out
+end
+
+local function normalize_profile(profile)
+    if type(profile) ~= "table" or type(profile.requirements) ~= "table" then
+        return nil, "INVALID RF PROFILE"
+    end
+    local normalized = {
+        id = profile.id or "UNKNOWN",
+        label = profile.label or profile.id or "RF Profile",
+        requirements = {},
+        ordered = {},
+    }
+    for _, key in ipairs(REQUIREMENT_ORDER) do
+        local req = profile.requirements[key]
+        if req then
+            local item = copy_requirement(req)
+            item.key = key
+            item.policy = item.policy or "required"
+            item.matcher = item.matcher or "exact"
+            normalized.requirements[key] = item
+            normalized.ordered[#normalized.ordered + 1] = item
+        end
+    end
+    if #normalized.ordered == 0 then return nil, "RF PROFILE HAS NO REQUIREMENTS" end
+    return normalized
+end
+
 function M.new(options)
     options = options or {}
     local self = {}
     local simulation = options.simulation
     local now_fn = options.getTime or getTime
+    local profile, profile_error = normalize_profile(options.profile)
+
+    local parameter_names = {}
+    local parameter_seen = {}
+    if profile then
+        for _, req in ipairs(profile.ordered) do
+            local names = type(req.parameter) == "table" and req.parameter or { req.parameter }
+            for _, name in ipairs(names) do
+                if name and not parameter_seen[name] then
+                    parameter_seen[name] = true
+                    parameter_names[#parameter_names + 1] = name
+                end
+            end
+        end
+    end
 
     local function crsf_push(command, data)
         if simulation and type(simulation.push) == "function" then
@@ -102,9 +138,7 @@ function M.new(options)
         if simulation and type(simulation.pop) == "function" then
             return simulation.pop(now_fn())
         end
-        if type(crossfireTelemetryPop) == "function" then
-            return crossfireTelemetryPop()
-        end
+        if type(crossfireTelemetryPop) == "function" then return crossfireTelemetryPop() end
         return nil
     end
 
@@ -126,20 +160,18 @@ function M.new(options)
         state.discovery_deadline = 0
         state.next_status = 0
         state.next_refresh = 0
-        state.ping_attempts = 0
+        state.refresh_attempts = 0
         state.status_requested = false
         state.status_deadline = 0
-        state.refresh_attempts = 0
         state.scan_complete = false
         state.status_seen = false
         state.connected = false
         state.armed = false
         state.model_mismatch = false
-        state.transport_error = nil
+        state.transport_error = profile_error
         state.gate_error = nil
-        state.supported = simulation ~= nil
-            or (type(crossfireTelemetryPush) == "function"
-                and type(crossfireTelemetryPop) == "function")
+        state.supported = profile ~= nil and (simulation ~= nil
+            or (type(crossfireTelemetryPush) == "function" and type(crossfireTelemetryPop) == "function"))
         state.fix = { stage = "idle", deadline = 0, message = "" }
     end
 
@@ -150,26 +182,40 @@ function M.new(options)
         state.initial_scan = initial_scan or false
     end
 
-    local function dynamic_setting()
-        if state.settings["Dynamic"] then return "Dynamic", state.settings["Dynamic"] end
-        if state.settings["Dynamic Power"] then return "Dynamic Power", state.settings["Dynamic Power"] end
+    local function setting_for(req)
+        local names = type(req.parameter) == "table" and req.parameter or { req.parameter }
+        for _, name in ipairs(names) do
+            if state.settings[name] then return name, state.settings[name] end
+        end
         return nil, nil
     end
 
+    local function matcher_for(req)
+        return MATCHERS[req.matcher] or MATCHERS.exact
+    end
+
+    local function requirement_matches(req, value)
+        return matcher_for(req)(value, req.target)
+    end
+
     local function target_complete()
-        for _, name in ipairs({"Packet Rate","Telem Ratio","Switch Mode","Model Match","Max Power"}) do
-            if not state.settings[name] then return false end
+        if not profile then return false end
+        for _, req in ipairs(profile.ordered) do
+            local _, setting = setting_for(req)
+            if not setting and req.policy ~= "if-supported" then return false end
         end
-        return state.settings["Dynamic"] ~= nil or state.settings["Dynamic Power"] ~= nil
+        return true
     end
 
     local function missing_text()
         local missing = {}
-        for _, name in ipairs({"Packet Rate","Telem Ratio","Switch Mode","Model Match","Max Power"}) do
-            if not state.settings[name] then missing[#missing + 1] = name end
-        end
-        if not state.settings["Dynamic"] and not state.settings["Dynamic Power"] then
-            missing[#missing + 1] = "Dynamic"
+        if profile then
+            for _, req in ipairs(profile.ordered) do
+                local _, setting = setting_for(req)
+                if not setting and req.policy ~= "if-supported" then
+                    missing[#missing + 1] = tostring(req.parameter)
+                end
+            end
         end
         return table.concat(missing, ",")
     end
@@ -180,6 +226,8 @@ function M.new(options)
         local field_count = data[offset + 12] or 0
         state.device_found = true
         state.device_name = device_name or "ELRS TX"
+        -- Match official ELRS Lua behavior: discovery from 0xEA, parameter
+        -- traffic from the dedicated ELRS Lua handset address 0xEF.
         state.handset_id = CRSF_ELRS_LUA
         state.transport_error = nil
         if field_count <= 0 or field_count == state.fields_count then return end
@@ -202,17 +250,14 @@ function M.new(options)
         local values = split_options(raw_options)
         local selected_index = payload[offset] or 0
         local unit = read_cstring(payload, offset + 4)
-        for _, target_name in ipairs(PARAMETER_NAMES) do
-            if name == target_name then
-                state.settings[name] = {
-                    value = values[selected_index + 1] or "?",
-                    unit = unit or "",
-                    index = selected_index,
-                    values = values
-                }
-                state.field_ids[name] = field_id_value
-                break
-            end
+        if parameter_seen[name] then
+            state.settings[name] = {
+                value = values[selected_index + 1] or "?",
+                unit = unit or "",
+                index = selected_index,
+                values = values,
+            }
+            state.field_ids[name] = field_id_value
         end
     end
 
@@ -249,12 +294,12 @@ function M.new(options)
         if state.current or state.queue_pos > #state.queue then return end
         local id = state.queue[state.queue_pos]
         state.queue_pos = state.queue_pos + 1
-        state.current = {id=id, chunk=0, payload={}, deadline=now, attempts=0}
+        state.current = { id=id, chunk=0, payload={}, deadline=now, attempts=0 }
     end
 
     local function refresh_targets(now)
         local ids = {}
-        for _, name in ipairs(PARAMETER_NAMES) do
+        for _, name in ipairs(parameter_names) do
             if state.field_ids[name] then ids[#ids + 1] = state.field_ids[name] end
         end
         if #ids > 0 then
@@ -291,8 +336,7 @@ function M.new(options)
             state.scan_complete = true
             state.transport_error = "NO ELRS TX MODULE RESPONSE"
         elseif not state.device_found and now >= state.next_ping then
-            crsf_submit(0x28, {CRSF_BROADCAST, CRSF_RADIO})
-            state.ping_attempts = state.ping_attempts + 1
+            crsf_submit(0x28, { CRSF_BROADCAST, CRSF_RADIO })
             state.next_ping = now + DISCOVERY_INTERVAL
             sent = true
         end
@@ -346,66 +390,90 @@ function M.new(options)
         end
     end
 
-    local function find_target(name, matcher)
+    local function find_target(name, req)
         local setting = state.settings[name]
         if not setting or not setting.values then return nil end
         for index, value in ipairs(setting.values) do
-            if matcher(value) then return index - 1 end
+            if requirement_matches(req, value) then return index - 1 end
         end
         return nil
     end
 
-    local function queue_readback(names)
-        local ids = {}
-        for _, name in ipairs(names) do
-            local id = state.field_ids[name]
-            if id then ids[#ids + 1] = id end
-        end
-        if #ids == 0 then return false end
-        queue_fields(ids, false)
+    local function queue_readback(name)
+        local id = state.field_ids[name]
+        if not id then return false end
+        queue_fields({ id }, false)
         return true
     end
 
     local function write_choice(name, value)
         local field = state.field_ids[name]
         if not field or value == nil then return false end
-        return crsf_push(0x2D, {state.device_id, state.handset_id, field, value})
+        return crsf_push(0x2D, { state.device_id, state.handset_id, field, value })
+    end
+
+    local function display_values()
+        local values = {}
+        if not profile then return values end
+        for _, req in ipairs(profile.ordered) do
+            local name, setting = setting_for(req)
+            local value = setting and clean(setting.value) or "?"
+            if setting and setting.unit and setting.unit ~= ""
+                and req.key == "maxPower"
+                and not string.find(string.lower(value), "mw", 1, true) then
+                value = value .. setting.unit
+            end
+            values[req.key] = value
+            values[req.key .. "Parameter"] = name
+        end
+        return values
+    end
+
+    local function mismatch_list()
+        local list = {}
+        if not profile then return list end
+        for _, req in ipairs(profile.ordered) do
+            local name, setting = setting_for(req)
+            if setting then
+                if not requirement_matches(req, setting.value) then
+                    list[#list + 1] = {
+                        key=req.key, parameter=name, current=clean(setting.value),
+                        target=req.display or req.target, policy=req.policy,
+                    }
+                end
+            elseif state.scan_complete and req.policy ~= "if-supported" then
+                list[#list + 1] = {
+                    key=req.key, parameter=tostring(req.parameter), current="NOT FOUND",
+                    target=req.display or req.target, policy=req.policy, missing=true,
+                }
+            end
+        end
+        return list
+    end
+
+    local function recommended_values()
+        local values = {}
+        if profile then
+            for _, req in ipairs(profile.ordered) do
+                values[req.key] = req.display or req.target
+            end
+        end
+        return values
+    end
+
+    local function next_fix_index(start)
+        if not profile then return nil end
+        for index = start or 1, #profile.ordered do
+            local req = profile.ordered[index]
+            local _, setting = setting_for(req)
+            if setting and not requirement_matches(req, setting.value) then return index end
+        end
+        return nil
     end
 
     local function set_fix(stage, message)
         state.fix.stage = stage
         state.fix.message = message
-    end
-
-    local function display_values()
-        local _, dyn = dynamic_setting()
-        local p = state.settings["Max Power"]
-        local power = p and clean(p.value) or "?"
-        if p and p.unit ~= "" and not string.find(string.lower(power), "mw", 1, true) then
-            power = power .. p.unit
-        end
-        return {
-            rate = state.settings["Packet Rate"] and clean(state.settings["Packet Rate"].value) or "?",
-            channels = state.settings["Switch Mode"] and clean(state.settings["Switch Mode"].value) or "?",
-            telemetry = state.settings["Telem Ratio"] and clean(state.settings["Telem Ratio"].value) or "?",
-            modelMatch = state.settings["Model Match"] and clean(state.settings["Model Match"].value) or "?",
-            power = power,
-            dynamic = dyn and clean(dyn.value) or "?",
-            antenna = state.settings["Antenna Mode"] and clean(state.settings["Antenna Mode"].value) or nil
-        }
-    end
-
-    local function mismatch_list()
-        local current = display_values()
-        local list = {}
-        if current.rate ~= "?" and not rate_ok(current.rate) then list[#list+1] = "Packet Rate" end
-        if current.channels ~= "?" and not switch_ok(current.channels) then list[#list+1] = "Switch Mode" end
-        if current.telemetry ~= "?" and not telem_ok(current.telemetry) then list[#list+1] = "Telem Ratio" end
-        if current.modelMatch ~= "?" and not model_match_ok(current.modelMatch) then list[#list+1] = "Model Match" end
-        if current.power ~= "?" and not power_ok(current.power) then list[#list+1] = "Max Power" end
-        if current.dynamic ~= "?" and not dynamic_ok(current.dynamic) then list[#list+1] = "Dynamic Power" end
-        if current.antenna and not antenna_ok(current.antenna) then list[#list+1] = "Antenna Mode" end
-        return list
     end
 
     local function begin_fix(gates)
@@ -414,130 +482,89 @@ function M.new(options)
         if state.connected or (type(gates.linkConnected) == "function" and gates.linkConnected()) then
             return false, "POWER OFF HELICOPTER FIRST"
         end
-        if state.status_seen and state.armed then return false, "SET CH5 TO 3D (-100) FIRST" end
+        if not state.scan_complete then return false, "ELRS SCAN NOT COMPLETE" end
+        if state.transport_error then return false, state.transport_error end
+        local index = next_fix_index(1)
+        if not index then return false, "NO ELRS SETTINGS NEED CHANGES" end
         local now = now_fn()
         state.fix = {
-            stage="set_rate", deadline=now+4500, next_action=now,
-            write_retries=0, message="APPLYING SETTINGS",
-            original=display_values()
+            stage="set", index=index, deadline=now+4500,
+            next_action=now, write_retries=0, message="APPLYING SETTINGS",
+            original=display_values(),
         }
-        state.next_refresh = state.fix.deadline + 100
         return true
     end
-
-    local function retry(fix, now, msg)
-        fix.write_retries = (fix.write_retries or 0) + 1
-        fix.next_action = now + 10
-        fix.message = msg .. " - CRSF BUSY, RETRYING"
-    end
-
-    local function accepted(fix) fix.write_retries = 0 end
 
     local function process_fix(safe_preflight)
         local fix = state.fix
         if fix.stage == "idle" or fix.stage == "complete" or fix.stage == "error" then return end
-        if not safe_preflight then set_fix("error","PRECHECK CHANGED - CHANGE CANCELLED"); return end
+        if not safe_preflight then set_fix("error", "PRECHECK CHANGED - CHANGE CANCELLED"); return end
         local now = now_fn()
-        if now > fix.deadline then set_fix("error","CHANGE NOT VERIFIED - USE ELRS LUA"); return end
-        if state.connected then set_fix("error","RECEIVER CONNECTED - CHANGE CANCELLED"); return end
+        if now > fix.deadline then set_fix("error", "CHANGE NOT VERIFIED - USE ELRS LUA"); return end
+        if state.connected then set_fix("error", "RECEIVER CONNECTED - CHANGE CANCELLED"); return end
+        if not reads_idle() or now < (fix.next_action or 0) then return end
 
-        local queues = {
-            queue_rate={names={"Packet Rate","Switch Mode"}, wait="wait_rate", err="ELRS PARAMETER IDS NOT AVAILABLE"},
-            queue_switch={names={"Switch Mode"}, wait="wait_switch", err="SWITCH MODE ID NOT AVAILABLE"},
-            queue_telem={names={"Telem Ratio"}, wait="wait_telem", err="TELEMETRY RATIO ID NOT AVAILABLE"},
-            queue_match={names={"Model Match"}, wait="wait_match", err="MODEL MATCH ID NOT AVAILABLE"},
-            queue_power={names={"Max Power"}, wait="wait_power", err="MAX POWER ID NOT AVAILABLE"},
-            queue_antenna={names={"Antenna Mode"}, wait="wait_antenna", err="ANTENNA MODE ID NOT AVAILABLE"}
-        }
-        if fix.stage == "queue_dynamic" then
-            if now < fix.next_action or not reads_idle() then return end
-            local name = dynamic_setting(); name = name or fix.dynamic_name
-            if not name or not queue_readback({name}) then set_fix("error","DYNAMIC POWER ID NOT AVAILABLE")
-            else fix.stage="wait_dynamic" end
-            return
-        end
-        local q = queues[fix.stage]
-        if q then
-            if now < fix.next_action or not reads_idle() then return end
-            if not queue_readback(q.names) then set_fix("error",q.err) else fix.stage=q.wait end
-            return
-        end
-        if not reads_idle() or (fix.next_action and now < fix.next_action) then return end
-
-        local function set_choice(stage_name, setting_name, matcher, next_stage, queue_stage, unavailable, message, clear_extra)
-            if fix.stage ~= stage_name then return false end
-            local setting = state.settings[setting_name]
-            if setting and matcher(setting.value) then fix.stage = next_stage; return true end
-            local target = find_target(setting_name, matcher)
-            if target == nil then set_fix("error", unavailable)
-            elseif not write_choice(setting_name, target) then retry(fix, now, message)
+        local req = profile and profile.ordered[fix.index]
+        if not req then set_fix("complete", "ALL SETTINGS VERIFIED"); return end
+        local name, setting = setting_for(req)
+        if not setting then
+            if req.policy == "if-supported" then
+                local next_index = next_fix_index(fix.index + 1)
+                if next_index then fix.index = next_index else set_fix("complete", "ALL SETTINGS VERIFIED") end
             else
-                accepted(fix)
-                state.settings[setting_name] = nil
-                if clear_extra then state.settings[clear_extra] = nil end
-                fix.stage = queue_stage
-                fix.next_action = now + 100
-                fix.message = message
+                set_fix("error", "REQUIRED ELRS SETTING NOT FOUND: " .. tostring(req.parameter))
             end
-            return true
-        end
-
-        if set_choice("set_rate","Packet Rate",rate_ok,"set_switch","queue_rate","333HZ FULL IS NOT AVAILABLE","SETTING 333HZ FULL","Switch Mode") then return end
-        if set_choice("set_switch","Switch Mode",switch_ok,"set_telem","queue_switch","8CH IS NOT AVAILABLE","SETTING 8CH FULL RES") then return end
-        if set_choice("set_telem","Telem Ratio",telem_ok,"set_match","queue_telem","TELEMETRY 1:32 IS NOT AVAILABLE","SETTING TELEMETRY 1:32") then return end
-        if set_choice("set_match","Model Match",model_match_ok,"set_power","queue_match","MODEL MATCH ON IS NOT AVAILABLE","ENABLING MODEL MATCH") then return end
-        if set_choice("set_power","Max Power",power_ok,"set_dynamic","queue_power","100mW IS NOT AVAILABLE","SETTING MAX POWER 100mW") then return end
-
-        local waits = {
-            wait_rate={name="Packet Rate",match=rate_ok,next="set_switch",err="333HZ FULL CHANGE REJECTED",msg="SETTING 8CH FULL RES"},
-            wait_switch={name="Switch Mode",match=switch_ok,next="set_telem",err="8CH CHANGE REJECTED",msg="SETTING TELEMETRY 1:32"},
-            wait_telem={name="Telem Ratio",match=telem_ok,next="set_match",err="TELEMETRY 1:32 CHANGE REJECTED",msg="ENABLING MODEL MATCH"},
-            wait_match={name="Model Match",match=model_match_ok,next="set_power",err="MODEL MATCH CHANGE REJECTED",msg="SETTING FIXED 100mW"},
-            wait_power={name="Max Power",match=power_ok,next="set_dynamic",err="100mW CHANGE REJECTED",msg="DISABLING DYNAMIC POWER"}
-        }
-        local w = waits[fix.stage]
-        if w then
-            local setting = state.settings[w.name]
-            if not setting then return end
-            if w.match(setting.value) then fix.stage=w.next; fix.message=w.msg else set_fix("error",w.err) end
             return
         end
 
-        if fix.stage == "set_dynamic" then
-            local name, setting = dynamic_setting()
-            if setting and dynamic_ok(setting.value) then
-                if state.settings["Antenna Mode"] then fix.stage="set_antenna"; fix.message="SETTING ANTENNA SWITCH"
-                else set_fix("complete","ALL SETTINGS VERIFIED") end
+        if fix.stage == "set" then
+            if requirement_matches(req, setting.value) then
+                local next_index = next_fix_index(fix.index + 1)
+                if next_index then fix.index = next_index else set_fix("complete", "ALL SETTINGS VERIFIED") end
                 return
             end
-            if not name then set_fix("error","DYNAMIC POWER SETTING NOT FOUND"); return end
-            local target = find_target(name, dynamic_ok)
-            if target == nil then set_fix("error","DYNAMIC POWER OFF IS NOT AVAILABLE")
-            elseif not write_choice(name,target) then retry(fix,now,"DISABLING DYNAMIC POWER")
+            local target = find_target(name, req)
+            if target == nil then
+                set_fix("error", tostring(req.display or req.target) .. " IS NOT AVAILABLE")
+            elseif not write_choice(name, target) then
+                fix.write_retries = (fix.write_retries or 0) + 1
+                fix.next_action = now + 10
+                fix.message = "SETTING " .. tostring(req.display or req.target) .. " - CRSF BUSY"
             else
-                accepted(fix); fix.dynamic_name=name; state.settings[name]=nil
-                fix.stage="queue_dynamic"; fix.next_action=now+100; fix.message="DISABLING DYNAMIC POWER"
+                fix.write_retries = 0
+                state.settings[name] = nil
+                fix.parameter = name
+                fix.stage = "queue_readback"
+                fix.next_action = now + 100
+                fix.message = "SETTING " .. tostring(req.display or req.target)
             end
-            return
-        elseif fix.stage == "wait_dynamic" then
-            local _, setting = dynamic_setting()
-            if not setting then return end
-            if dynamic_ok(setting.value) then
-                if state.settings["Antenna Mode"] then fix.stage="set_antenna"; fix.message="SETTING ANTENNA SWITCH"
-                else set_fix("complete","ALL SETTINGS VERIFIED") end
-            else set_fix("error","DYNAMIC POWER OFF CHANGE REJECTED") end
             return
         end
 
-        if set_choice("set_antenna","Antenna Mode",antenna_ok,"complete","queue_antenna","ANTENNA SWITCH IS NOT AVAILABLE","SETTING ANTENNA SWITCH") then
-            if fix.stage == "complete" then set_fix("complete","ALL SETTINGS VERIFIED") end
+        if fix.stage == "queue_readback" then
+            if not queue_readback(fix.parameter) then
+                set_fix("error", "ELRS PARAMETER ID NOT AVAILABLE")
+            else
+                fix.stage = "wait_readback"
+            end
             return
         end
-        if fix.stage == "wait_antenna" then
-            local setting = state.settings["Antenna Mode"]
-            if not setting then return end
-            if antenna_ok(setting.value) then set_fix("complete","ALL SETTINGS VERIFIED")
-            else set_fix("error","ANTENNA SWITCH CHANGE REJECTED") end
+
+        if fix.stage == "wait_readback" then
+            local _, readback = setting_for(req)
+            if not readback then return end
+            if not requirement_matches(req, readback.value) then
+                set_fix("error", tostring(req.display or req.target) .. " CHANGE REJECTED")
+                return
+            end
+            local next_index = next_fix_index(fix.index + 1)
+            if next_index then
+                fix.index = next_index
+                fix.stage = "set"
+                fix.next_action = now + 25
+            else
+                set_fix("complete", "ALL SETTINGS VERIFIED")
+            end
         end
     end
 
@@ -549,16 +576,16 @@ function M.new(options)
     function self.beginFix(gates) return begin_fix(gates) end
     function self.getState() return state end
     function self.getCurrent() return display_values() end
-    function self.getRecommended() return RECOMMENDED end
+    function self.getRecommended() return recommended_values() end
     function self.getMismatches() return mismatch_list() end
     function self.fixRequired() return #mismatch_list() > 0 end
     function self.scanComplete() return state.scan_complete end
     function self.supported() return state.supported end
+    function self.getProfile() return profile end
     function self.setGateError(value) state.gate_error = value end
 
     reset()
     return self
 end
 
-M.RECOMMENDED = RECOMMENDED
 return M
