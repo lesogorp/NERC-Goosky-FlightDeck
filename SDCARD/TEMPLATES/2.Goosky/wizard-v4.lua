@@ -115,8 +115,6 @@ local function label(text)
     }
 end
 
--- Text in the right-side 40% pane needs a small gutter from the center divider,
--- especially on 480x320 displays where starting at x=0 visually touches it.
 local function sideLabel(text)
     local inset=wizard.isLargeLCD() and 14 or 8
     return {
@@ -437,7 +435,7 @@ switchPage=function()
         previousLabel="<  BACK",
         nextLabel=function()
             if allSwitchesAssigned() and state.capture.active==nil then return "NEXT  >" end
-            return "ASSIGN ALL"
+            return "ASSIGN"
         end,
         previousFunc=function() selectPage(-1) end,
         nextFunc=function()
@@ -503,7 +501,6 @@ local function reviewPage()
     local colors=currentColors()
     local children2=previewChildren()
     if profileReady() then
-        children2[#children2+1]=sideLabel("READY TO PROGRAM")
         children2[#children2+1]=sideLabel("Safety: disconnect motor or remove blades before testing.")
     else
         children2[#children2+1]=sideLabel("PROFILE NOT VERIFIED")
