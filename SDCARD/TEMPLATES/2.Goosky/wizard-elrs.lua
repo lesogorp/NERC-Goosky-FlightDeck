@@ -43,7 +43,6 @@ function M.new(options)
     local headH=metrics.large and 26 or 19
     local statusH=metrics.large and 30 or 21
     local xPad=metrics.large and 12 or 7
-    local statusPad=metrics.large and 18 or 10
     local font=metrics.fieldFont
 
     local function stateSignature()
@@ -98,12 +97,24 @@ function M.new(options)
         return tostring(target or "--")
     end
 
-    local function cell(text,width,color,pad)
+    local function cell(text,width,color)
         return {
             type="rectangle", w=lvgl.PERCENT_SIZE+width, h=rowH,
             thickness=0, align=LEFT|VCENTER,
             children={{
-                type="label", x=pad or xPad, w=lvgl.PERCENT_SIZE+92,
+                type="label", x=xPad, w=lvgl.PERCENT_SIZE+92,
+                color=color or wizard.textColor(), font=font,
+                text=text,
+            }},
+        }
+    end
+
+    local function statusCell(text,color)
+        return {
+            type="rectangle", w=lvgl.PERCENT_SIZE+17, h=rowH,
+            thickness=0, align=LEFT|VCENTER,
+            children={{
+                type="label", align=CENTER,
                 color=color or wizard.textColor(), font=font,
                 text=text,
             }},
@@ -111,19 +122,27 @@ function M.new(options)
     end
 
     local function tableHeader()
-        local function hcell(text,width,pad)
+        local function hcell(text,width)
             return {
                 type="rectangle", w=lvgl.PERCENT_SIZE+width, h=headH,
                 thickness=0, align=LEFT|VCENTER,
-                children={{ type="label", x=pad or xPad, w=lvgl.PERCENT_SIZE+92,
+                children={{ type="label", x=xPad, w=lvgl.PERCENT_SIZE+92,
                     color=wizard.textColor(), font=font, text=text }},
+            }
+        end
+        local function statusHeader()
+            return {
+                type="rectangle", w=lvgl.PERCENT_SIZE+17, h=headH,
+                thickness=0, align=LEFT|VCENTER,
+                children={{ type="label", align=CENTER,
+                    color=wizard.textColor(), font=font, text="STATUS" }},
             }
         end
         return {
             type="rectangle", w=lvgl.PERCENT_SIZE+100, h=headH,
             thickness=0, flexPad=0, flexFlow=lvgl.FLOW_ROW, align=LEFT|VCENTER,
             children={
-                hcell("SETTING",24), hcell("CURRENT",28), hcell("TARGET",28), hcell("STATUS",20,statusPad)
+                hcell("SETTING",25), hcell("CURRENT",29), hcell("TARGET",29), statusHeader()
             }
         }
     end
@@ -143,7 +162,7 @@ function M.new(options)
             type="rectangle", w=lvgl.PERCENT_SIZE+100, h=rowH,
             thickness=0, flexPad=0, flexFlow=lvgl.FLOW_ROW, align=LEFT|VCENTER,
             children={
-                cell(def.label,24), cell(currentText,28), cell(targetText,28), cell(statusText,20,statusColor,statusPad)
+                cell(def.label,25), cell(currentText,29), cell(targetText,29), statusCell(statusText,statusColor)
             }
         }
     end
