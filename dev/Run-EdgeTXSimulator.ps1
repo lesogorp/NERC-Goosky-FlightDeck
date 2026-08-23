@@ -127,7 +127,8 @@ if (-not $profile -and -not $radio) {
 $simulatorExe = Find-SimulatorExecutable ([string]$config.simulatorExe)
 $sdPath = Resolve-TargetSdPath -Config $config -TargetConfig $targetConfig -TargetName $Target
 $sdSource = Join-Path $Workspace "SDCARD"
-$simBackendSource = Join-Path $Workspace "dev\simulator.lua"
+$telemetrySimSource = Join-Path $Workspace "dev\simulator.lua"
+$elrsSimSource = Join-Path $Workspace "dev\elrs-simulator.lua"
 
 if (-not (Test-Path -LiteralPath $sdSource -PathType Container)) {
     throw "Repository SDCARD directory was not found: $sdSource"
@@ -151,18 +152,32 @@ $injectSimulation = $true
 if ($null -ne $config.injectTelemetrySimulation) {
     $injectSimulation = [bool]$config.injectTelemetrySimulation
 }
-$simBackendDestination = Join-Path $sdPath "WIDGETS\NERC_GSkyFD\simulator.lua"
+
+$telemetrySimDestination = Join-Path $sdPath "WIDGETS\NERC_GSkyFD\simulator.lua"
+$elrsSimDestination = Join-Path $sdPath "SCRIPTS\LIB\NERC_ELRS_SIM.lua"
+
 if ($injectSimulation) {
-    if (-not (Test-Path -LiteralPath $simBackendSource -PathType Leaf)) {
-        throw "Simulator telemetry backend was not found: $simBackendSource"
+    if (-not (Test-Path -LiteralPath $telemetrySimSource -PathType Leaf)) {
+        throw "Simulator telemetry backend was not found: $telemetrySimSource"
     }
-    New-Item -ItemType Directory -Path (Split-Path -Parent $simBackendDestination) -Force | Out-Null
-    Copy-Item -LiteralPath $simBackendSource -Destination $simBackendDestination -Force
-    Write-Host "Injected dev telemetry backend."
+    if (-not (Test-Path -LiteralPath $elrsSimSource -PathType Leaf)) {
+        throw "Simulator ELRS backend was not found: $elrsSimSource"
+    }
+
+    New-Item -ItemType Directory -Path (Split-Path -Parent $telemetrySimDestination) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path -Parent $elrsSimDestination) -Force | Out-Null
+    Copy-Item -LiteralPath $telemetrySimSource -Destination $telemetrySimDestination -Force
+    Copy-Item -LiteralPath $elrsSimSource -Destination $elrsSimDestination -Force
+    Write-Host "Injected independent telemetry and ELRS simulation backends."
 }
-elseif (Test-Path -LiteralPath $simBackendDestination -PathType Leaf) {
-    Remove-Item -LiteralPath $simBackendDestination -Force
-    Write-Host "Removed dev telemetry backend because injectTelemetrySimulation=false."
+else {
+    if (Test-Path -LiteralPath $telemetrySimDestination -PathType Leaf) {
+        Remove-Item -LiteralPath $telemetrySimDestination -Force
+    }
+    if (Test-Path -LiteralPath $elrsSimDestination -PathType Leaf) {
+        Remove-Item -LiteralPath $elrsSimDestination -Force
+    }
+    Write-Host "Removed dev simulation backends because injectTelemetrySimulation=false."
 }
 
 if ($SyncOnly) {
