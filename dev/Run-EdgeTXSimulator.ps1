@@ -78,15 +78,40 @@ function Stop-ExistingSimulator {
         }
 }
 
+function Resolve-TargetSdPath {
+    param(
+        [Parameter(Mandatory = $true)]$Config,
+        [Parameter(Mandatory = $true)]$TargetConfig,
+        [Parameter(Mandatory = $true)][string]$TargetName
+    )
+
+    # Highest priority: an explicit full path on the target itself.
+    if ($TargetConfig.sdPath) {
+        return Resolve-LocalPath ([string]$TargetConfig.sdPath)
+    }
+
+    # Preferred layout for official EdgeTX SD packs:
+    #   <sdRoot>\c800x480  -> TX16S MK3
+    #   <sdRoot>\c480x320  -> GX15 / TX15 class
+    if ($Config.sdRoot -and $TargetConfig.sdFolder) {
+        $root = Resolve-LocalPath ([string]$Config.sdRoot)
+        return [System.IO.Path]::GetFullPath((Join-Path $root ([string]$TargetConfig.sdFolder)))
+    }
+
+    # Backward compatibility with the original single-SD configuration.
+    if ($Config.sdPath) {
+        return Resolve-LocalPath ([string]$Config.sdPath)
+    }
+
+    throw "No simulator SD path is configured for target '$TargetName'. Set targets.$TargetName.sdPath, or set sdRoot plus targets.$TargetName.sdFolder."
+}
+
 $configPath = Join-Path $PSScriptRoot "simulator.local.json"
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw "Missing dev\simulator.local.json. Copy dev\simulator.local.example.json to simulator.local.json and set the local EdgeTX paths/profile names."
 }
 
 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-if (-not $config.sdPath) {
-    throw "simulator.local.json must define sdPath."
-}
 if (-not $config.targets) {
     throw "simulator.local.json must define targets."
 }
@@ -103,12 +128,15 @@ if (-not $profile -and -not $radio) {
 }
 
 $simulatorExe = Find-SimulatorExecutable ([string]$config.simulatorExe)
-$sdPath = Resolve-LocalPath ([string]$config.sdPath)
+$sdPath = Resolve-TargetSdPath -Config $config -TargetConfig $targetConfig -TargetName $Target
 $sdSource = Join-Path $Workspace "SDCARD"
 $simBackendSource = Join-Path $Workspace "dev\simulator.lua"
 
 if (-not (Test-Path -LiteralPath $sdSource -PathType Container)) {
     throw "Repository SDCARD directory was not found: $sdSource"
+}
+if (-not (Test-Path -LiteralPath $sdPath -PathType Container)) {
+    throw "EdgeTX SD pack for target '$Target' was not found: $sdPath"
 }
 
 $stopExisting = $true
@@ -117,7 +145,8 @@ if (-not $SyncOnly -and $stopExisting) {
     Stop-ExistingSimulator $simulatorExe
 }
 
-New-Item -ItemType Directory -Path $sdPath -Force | Out-Null
+Write-Host "Target: $Target"
+if ($targetConfig.sdFolder) { Write-Host "SD pack: $($targetConfig.sdFolder)" }
 Write-Host "Merging NERC SD payload into: $sdPath"
 Copy-Item -Path (Join-Path $sdSource "*") -Destination $sdPath -Recurse -Force
 
@@ -140,7 +169,7 @@ elseif (Test-Path -LiteralPath $simBackendDestination -PathType Leaf) {
 }
 
 if ($SyncOnly) {
-    Write-Host "Simulator SD sync complete."
+    Write-Host "Simulator SD sync complete for '$Target'."
     exit 0
 }
 
