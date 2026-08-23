@@ -26,7 +26,7 @@
       "problemMatcher": []
     },
     {
-      "label": "EdgeTX: Sync simulator SD",
+      "label": "EdgeTX: Sync MK3 simulator SD",
       "type": "process",
       "command": "powershell.exe",
       "args": [
@@ -37,6 +37,26 @@
         "${workspaceFolder}\\dev\\Run-EdgeTXSimulator.ps1",
         "-Workspace",
         "${workspaceFolder}",
+        "-Target",
+        "mk3",
+        "-SyncOnly"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "EdgeTX: Sync GX15 simulator SD",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\dev\\Run-EdgeTXSimulator.ps1",
+        "-Workspace",
+        "${workspaceFolder}",
+        "-Target",
+        "gx15",
         "-SyncOnly"
       ],
       "problemMatcher": []
