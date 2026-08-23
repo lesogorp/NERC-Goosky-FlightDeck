@@ -15,9 +15,18 @@ local READBACK_RETRY_DELAY = 100
 local RESCAN_RETRY_LIMIT = 2
 local RESCAN_DELAY = 100
 
+-- Display/profile order remains user-facing and unchanged. Repair order is
+-- deliberately separate: Model Match is repaired while the initial parameter
+-- tree is still fresh. Packet Rate is left until the end because changing rate
+-- can rebuild/reindex ELRS fields; Switch Mode is then refreshed and repaired.
 local REQUIREMENT_ORDER = {
     "packetRate", "switchMode", "telemetry", "modelMatch",
     "maxPower", "dynamicPower", "antennaMode"
+}
+
+local REPAIR_KEY_ORDER = {
+    "modelMatch", "telemetry", "maxPower", "dynamicPower",
+    "antennaMode", "packetRate", "switchMode"
 }
 
 local function clean(value)
@@ -109,6 +118,14 @@ function M.new(options)
     local simulation = options.simulation
     local now_fn = options.getTime or getTime
     local profile, profile_error = normalize_profile(options.profile)
+
+    local repair_order = {}
+    if profile then
+        for _, key in ipairs(REPAIR_KEY_ORDER) do
+            local req = profile.requirements[key]
+            if req then repair_order[#repair_order + 1] = req end
+        end
+    end
 
     local parameter_names = {}
     local parameter_seen = {}
@@ -322,10 +339,6 @@ function M.new(options)
 
     local function queue_full_rescan()
         if state.fields_count <= 0 then return false end
-        -- Recovery scans merge fresh parameter replies into the last complete
-        -- snapshot instead of deleting that snapshot up front. ELRS can miss a
-        -- field on a single tree walk; clearing the cache made a transient miss
-        -- look like a real "SETTING NOT FOUND" and stopped the repair sequence.
         state.transport_error = nil
         local ids = {}
         for id = 1, state.fields_count do ids[#ids + 1] = id end
@@ -497,9 +510,8 @@ function M.new(options)
     end
 
     local function next_fix_index(start)
-        if not profile then return nil end
-        for index = start or 1, #profile.ordered do
-            local req = profile.ordered[index]
+        for index = start or 1, #repair_order do
+            local req = repair_order[index]
             local _, setting = setting_for(req)
             if not setting then
                 if req.policy ~= "if-supported" then return index end
@@ -558,7 +570,7 @@ function M.new(options)
             return
         end
 
-        local req = profile and profile.ordered[fix.index]
+        local req = repair_order[fix.index]
         if not req then set_fix("complete", "ALL SETTINGS VERIFIED"); return end
         local name, setting = setting_for(req)
         if not setting then
@@ -600,7 +612,7 @@ function M.new(options)
                 state.settings[name] = nil
                 fix.parameter = name
                 fix.stage = "queue_readback"
-                fix.next_action = now + 100
+                fix.next_action = now + (req.key == "modelMatch" and 200 or 100)
                 fix.message = "SETTING " .. tostring(req.display or req.target)
             end
             return
