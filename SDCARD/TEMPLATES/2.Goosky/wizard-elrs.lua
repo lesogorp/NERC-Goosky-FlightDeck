@@ -12,6 +12,18 @@ local profiles = profilesLoader()
 local elrsFactory = elrsLoader()
 profilesLoader=nil; elrsLoader=nil
 
+-- The VS Code simulator task injects this development-only backend into the
+-- simulator SD pack. It is intentionally absent from flight radios, so normal
+-- hardware always uses the native EdgeTX CRSF transport.
+local simulation=nil
+do
+    local okLoader,simLoader=pcall(loadScript,"/WIDGETS/NERC_GSkyFD/simulator.lua")
+    if okLoader and type(simLoader)=="function" then
+        local okSim,sim=pcall(simLoader)
+        if okSim and type(sim)=="table" and sim.is_goosky_simulator then simulation=sim end
+    end
+end
+
 local M = {}
 
 local ROWS = {
@@ -81,7 +93,7 @@ function M.new(options)
             local ok,err=pcall(ensureModule)
             if not ok then errorText=tostring(err); session=nil; return false end
         end
-        session=elrsFactory.new({ profile=profile })
+        session=elrsFactory.new({ profile=profile, simulation=simulation })
         if not session.supported() then
             errorText="ELRS CHECK UNAVAILABLE"
             return false
