@@ -1,0 +1,300 @@
+name: Apply feedback settings integration
+
+on:
+  push:
+    branches:
+      - feature/feedback-settings
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/feedback-settings
+          fetch-depth: 0
+
+      - name: Integrate feedback preferences
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          main_path = Path('SDCARD/WIDGETS/NERC_GSkyFD/main.lua')
+          main = main_path.read_text()
+
+          main = replace_once(main,
+          '''local auto_profile = nil
+          local simulation = nil
+          ''',
+          '''local auto_profile = nil
+          local simulation = nil
+
+          -- Radio-wide NERC feedback preferences are kept outside widget options so
+          -- LED intensity and haptics remain consistent across models and wizards.
+          local feedback = nil
+          local feedback_prefs = {
+              leds = true,
+              gimbalBrightness = 100,
+              switchBrightness = 100,
+              haptic = true,
+          }
+          local feedback_next_load = 0
+          local feedback_signature = ""
+          do
+              local loader = type(loadScript) == "function"
+                  and loadScript("/SCRIPTS/LIB/NERC_FEEDBACK.lua") or nil
+              if type(loader) == "function" then
+                  local ok, module = pcall(loader)
+                  if ok and type(module) == "table" then feedback = module end
+              end
+          end
+
+          local function refresh_feedback_preferences()
+              local now = getTime()
+              if now < feedback_next_load then return feedback_prefs end
+              feedback_next_load = now + 100
+              local next_prefs = feedback and type(feedback.load) == "function"
+                  and feedback.load() or feedback_prefs
+              if feedback and type(feedback.normalize) == "function" then
+                  next_prefs = feedback.normalize(next_prefs)
+              end
+              local signature = feedback and type(feedback.signature) == "function"
+                  and feedback.signature(next_prefs)
+                  or table.concat({
+                      next_prefs.leds and "1" or "0",
+                      tostring(next_prefs.gimbalBrightness or 100),
+                      tostring(next_prefs.switchBrightness or 100),
+                      next_prefs.haptic and "1" or "0"
+                  }, ":")
+              if signature ~= feedback_signature then
+                  feedback_prefs = next_prefs
+                  feedback_signature = signature
+                  led_cache.signature = nil
+                  led_cache.retry_at = 0
+              end
+              return feedback_prefs
+          end
+
+          local function scale_feedback(value, brightness)
+              if feedback and type(feedback.scale) == "function" then
+                  return feedback.scale(value, brightness)
+              end
+              value = math.max(0, math.min(255, tonumber(value) or 0))
+              brightness = math.max(0, math.min(100, tonumber(brightness) or 100))
+              return math.floor((value * brightness / 100) + 0.5)
+          end
+          ''', 'main feedback loader')
+
+          main = replace_once(main,
+          '''    -- Combines plain-language status assistance and the optional radio LEDs so
+              -- the widget remains within EdgeTX's ten native-option limit.
+              -- On includes both the plain-language screen alerts and the radio's
+              -- programmable RGB gimbal lights. Screen Only leaves the lights alone.
+              { "StatusHelp", CHOICE, 1, { "On", "Screen Only", "Off" } },
+          ''',
+          '''    -- StatusHelp remains the per-widget presentation switch. When On, screen
+              -- assistance is active and the radio-wide NERC Feedback preferences decide
+              -- whether LEDs/haptics are enabled and how bright the LEDs are.
+              -- Screen Only leaves LEDs and haptics alone; Off disables status assistance.
+              { "StatusHelp", CHOICE, 1, { "On", "Screen Only", "Off" } },
+          ''', 'main StatusHelp comment')
+
+          main = replace_once(main,
+          '''    led_cache.signature = nil
+              led_cache.retry_at = 0
+              led_cache.buttons_ready = nil
+              reset_elrs_state()
+          ''',
+          '''    led_cache.signature = nil
+              led_cache.retry_at = 0
+              led_cache.buttons_ready = nil
+              feedback_next_load = 0
+              feedback_signature = ""
+              refresh_feedback_preferences()
+              reset_elrs_state()
+          ''', 'main create feedback refresh')
+
+          main = replace_once(main,
+          '''    local function_led_count = LED_STRIP_LENGTH >= 26 and 6 or 0
+              local system_led_count = LED_STRIP_LENGTH - function_led_count
+              local now = getTime()
+              local ring_phase = math.floor(now / 8)
+              local switch_phase = math.floor(now / 10)
+              local signature = "splash:" .. tostring(ring_phase) .. ":" .. tostring(switch_phase)
+          ''',
+          '''    local prefs = refresh_feedback_preferences()
+              local function_led_count = LED_STRIP_LENGTH >= 26 and 6 or 0
+              local system_led_count = LED_STRIP_LENGTH - function_led_count
+              local gimbal_brightness = prefs.leds and prefs.gimbalBrightness or 0
+              local switch_brightness = prefs.leds and prefs.switchBrightness or 0
+              local now = getTime()
+              local ring_phase = math.floor(now / 8)
+              local switch_phase = math.floor(now / 10)
+              local signature = table.concat({
+                  "splash", tostring(ring_phase), tostring(switch_phase),
+                  tostring(gimbal_brightness), tostring(switch_brightness)
+              }, ":")
+          ''', 'splash preferences')
+
+          main = replace_once(main,
+          '''                pcall(setRGBLedColor, ring_start + offset, comet_red[tail + 1], 0, 0)
+          ''',
+          '''                pcall(setRGBLedColor, ring_start + offset,
+                      scale_feedback(comet_red[tail + 1], gimbal_brightness), 0, 0)
+          ''', 'splash gimbal scale')
+
+          main = replace_once(main,
+          '''            local ok, accepted = pcall(setRGBLedColor,
+                          system_led_count + segment, red, 0, 0)
+          ''',
+          '''            local ok, accepted = pcall(setRGBLedColor,
+                          system_led_count + segment,
+                          scale_feedback(red, switch_brightness), 0, 0)
+          ''', 'splash switch scale')
+
+          main = replace_once(main,
+          '''    local led_enabled = (widget.options.StatusHelp or 1) == 1
+              local requested_level = led_enabled and (level or "warning") or "off"
+              local function_led_count = LED_STRIP_LENGTH >= 26 and 6 or 0
+          ''',
+          '''    local prefs = refresh_feedback_preferences()
+              local led_enabled = (widget.options.StatusHelp or 1) == 1 and prefs.leds
+              local requested_level = led_enabled and (level or "warning") or "off"
+              local function_led_count = LED_STRIP_LENGTH >= 26 and 6 or 0
+          ''', 'status LED global enable')
+
+          main = replace_once(main,
+          '''        tostring(battery_segments),
+                  clamped_percent <= 15 and "red" or (clamped_percent <= 30 and "yellow" or "green")
+              }, ":")
+          ''',
+          '''        tostring(battery_segments),
+                  clamped_percent <= 15 and "red" or (clamped_percent <= 30 and "yellow" or "green"),
+                  tostring(prefs.gimbalBrightness), tostring(prefs.switchBrightness),
+                  prefs.leds and "leds-on" or "leds-off"
+              }, ":")
+          ''', 'status LED signature')
+
+          main = replace_once(main,
+          '''    for i = 0, system_led_count - 1 do
+                  pcall(setRGBLedColor, i, red, green, blue)
+              end
+          ''',
+          '''    for i = 0, system_led_count - 1 do
+                  pcall(setRGBLedColor, i,
+                      scale_feedback(red, prefs.gimbalBrightness),
+                      scale_feedback(green, prefs.gimbalBrightness),
+                      scale_feedback(blue, prefs.gimbalBrightness))
+              end
+          ''', 'status gimbal scale')
+
+          main = replace_once(main,
+          '''        local call_ok, accepted = pcall(setRGBLedColor,
+                  system_led_count + segment - 1,
+                  segment_red, segment_green, segment_blue)
+          ''',
+          '''        local call_ok, accepted = pcall(setRGBLedColor,
+                  system_led_count + segment - 1,
+                  scale_feedback(segment_red, prefs.switchBrightness),
+                  scale_feedback(segment_green, prefs.switchBrightness),
+                  scale_feedback(segment_blue, prefs.switchBrightness))
+          ''', 'status switch scale')
+
+          main = replace_once(main,
+          '''local function update_status_haptic(widget, level)
+              -- Haptics follow the same full Status Help mode as the gimbal LEDs. Only
+              -- severity transitions trigger feedback so the fast widget refresh cannot
+              -- create a continuous vibration.
+              if (widget.options.StatusHelp or 1) ~= 1 or type(playHaptic) ~= "function" then
+          ''',
+          '''local function update_status_haptic(widget, level)
+              -- StatusHelp enables feedback for this widget; the radio-wide NERC setting
+              -- can independently disable haptics without changing screen or LED behavior.
+              local prefs = refresh_feedback_preferences()
+              if (widget.options.StatusHelp or 1) ~= 1 or not prefs.haptic
+                  or type(playHaptic) ~= "function" then
+          ''', 'haptic preference')
+
+          main_path.write_text(main)
+
+          wizard_path = Path('SDCARD/TEMPLATES/2.Goosky/wizard.lua')
+          wizard = wizard_path.read_text()
+
+          wizard = replace_once(wizard,
+          '''local wizard = loadScript(RUN_DIR .. "/wizard-ui.lua")()
+          local elrsStageFactory = loadScript(RUN_DIR .. "/wizard-elrs.lua")()
+          ''',
+          '''local wizard = loadScript(RUN_DIR .. "/wizard-ui.lua")()
+          local elrsStageFactory = loadScript(RUN_DIR .. "/wizard-elrs.lua")()
+          local feedbackLoader = loadScript("/SCRIPTS/LIB/NERC_FEEDBACK.lua")
+          local feedback = type(feedbackLoader) == "function" and feedbackLoader() or nil
+          feedbackLoader = nil
+          local feedbackPrefs = feedback and feedback.load and feedback.load() or {
+              leds=true, gimbalBrightness=100, switchBrightness=100, haptic=true
+          }
+
+          local function loadFeedbackPrefs()
+              if feedback and type(feedback.load) == "function" then
+                  feedbackPrefs = feedback.load()
+              end
+          end
+          ''', 'wizard feedback loader')
+
+          wizard = replace_once(wizard,
+          '''local function setLed(index,r,g,b)
+              pcall(setRGBLedColor,index,r,g,b)
+          end
+          ''',
+          '''local function setLed(index,r,g,b)
+              if not feedbackPrefs.leds then
+                  r,g,b=0,0,0
+              else
+                  local systemCount=ledCounts()
+                  local brightness=index<systemCount
+                      and feedbackPrefs.gimbalBrightness or feedbackPrefs.switchBrightness
+                  if feedback and type(feedback.scale)=="function" then
+                      r=feedback.scale(r,brightness)
+                      g=feedback.scale(g,brightness)
+                      b=feedback.scale(b,brightness)
+                  else
+                      local scale=math.max(0,math.min(100,tonumber(brightness) or 100))/100
+                      r=math.floor(r*scale+0.5); g=math.floor(g*scale+0.5); b=math.floor(b*scale+0.5)
+                  end
+              end
+              pcall(setRGBLedColor,index,r,g,b)
+          end
+          ''', 'wizard LED scale')
+
+          wizard = replace_once(wizard,
+          '''local function init()
+              buildSwitchSources()
+          ''',
+          '''local function init()
+              loadFeedbackPrefs()
+              buildSwitchSources()
+          ''', 'wizard init preferences')
+
+          wizard_path.write_text(wizard)
+          PY
+
+      - name: Remove one-time patch workflow
+        run: git rm .github/workflows/apply-feedback-settings.yml
+
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SDCARD/WIDGETS/NERC_GSkyFD/main.lua SDCARD/TEMPLATES/2.Goosky/wizard.lua
+          git commit -m "feat(feedback): apply radio-wide LED and haptic preferences"
+          git push origin HEAD:feature/feedback-settings
