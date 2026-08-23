@@ -1,8 +1,8 @@
 -- NERC Goosky BNF Wizard v1 entry point for EdgeTX 2.12 color radios.
--- Initial port intentionally excludes ELRS check/fix logic.
+-- Loads the production wizard implementation.
 
 local RUN_DIR = "/TEMPLATES/2.Goosky"
-local wizard = loadScript(RUN_DIR .. "/wizard-v4.lua")()
+local wizard = loadScript(RUN_DIR .. "/wizard.lua")()
 
 return {
     init = wizard.init,

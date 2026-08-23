@@ -1,582 +1,672 @@
--- NERC Goosky BNF Wizard v1 - EdgeTX 2.12 color radios
--- Native LVGL wizard port of the proven GooskySetup model writer.
--- ELRS setting check/fix is intentionally OUTSIDE this initial wizard port.
+-- NERC Goosky BNF Wizard v1
+-- EdgeTX 2.12 color radios
+-- Hardware-validated low-latency switch capture and Receiver ID allocation.
+-- Programs verified S1 V2 / S2 MAX profiles only.
+-- No ELRS operating-parameter validation or auto-fix logic.
 
-local STOCK_WIZARD_DIR = "/TEMPLATES/1.Wizard/lib"
-local wizard = loadScript(STOCK_WIZARD_DIR .. "/wizard-ui.lua")()
+local RUN_DIR = "/TEMPLATES/2.Goosky"
+local IMAGE_DIR = "/IMAGES/"
+local MODELS_DIR = "/MODELS"
+local wizard = loadScript(RUN_DIR .. "/wizard-ui.lua")()
 
 local TITLE = "NERC Goosky BNF Wizard"
-local AUTO_CFG_PREFIX = "/SCRIPTS/TOOLS/NERC_GSkyFD_"
-local LEGACY_AUTO_CFG_PREFIX = "/WIDGETS/NERC_GSkyFD/auto_"
+local MAX_RECEIVER_ID = 63
+local TARGET_MODULE_INDEX = 0
+local TARGET_RF_TYPE = "TYPE_CROSSFIRE"
+local TARGET_RF_SUBTYPE = "0"
+local SWITCH_SETTLE_TICKS = 20
 
 local page = 1
 local pages = {}
-local applyResult = nil
-local applyError = nil
+local switchPage
+local completePage
+local switchLedState = nil
 
--- All listed aircraft use the same Goosky CH1-CH6 control contract.
--- Only S1 V2 and S2 MAX currently have verified throttle/model defaults from
--- the existing GooskySetup proof of concept. The wizard will not guess the
--- throttle/governor setup for the other models.
-local models = {
-    { name = "S1 V1", telemetry = false, rf = "SBUS", profileReady = false },
-    { name = "S1 V2", telemetry = true, rf = "CRSF / ELRS", profileReady = true, imagePrefix = "GKS1" },
-    { name = "S2 Legend V1", telemetry = false, rf = "SBUS / CRSF (FW)", profileReady = false },
-    { name = "S2 MAX", telemetry = true, rf = "CRSF / ELRS", profileReady = true, imagePrefix = "GKS2" },
-    { name = "RS4 Venom", telemetry = false, rf = "SBUS", profileReady = false },
-}
-
-local colors = {
-    { name = "Orange", suffix = "OR" },
-    { name = "Blue", suffix = "BL" },
-    { name = "Purple", suffix = "PU" },
-}
-
-local switchNames = { "SA", "SB", "SC", "SD", "SE", "SF", "SG", "SH" }
-local switchPositions = {}
-local switchPositionData = {}
-for _, name in ipairs(switchNames) do
-    for _, position in ipairs({ "up", "mid", "down" }) do
-        switchPositions[#switchPositions + 1] = name .. " " .. string.upper(position)
-        switchPositionData[#switchPositionData + 1] = { name = name, position = position }
-    end
-end
-
-local timerValues = {}
+local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
+local standardColors = { "Orange", "Blue", "Purple" }
+local rs4VenomColors = { "Orange", "Green" }
+local timers = {}
 local timerSeconds = {}
 for seconds = 30, 1200, 30 do
+    local m = math.floor(seconds / 60)
+    local s = seconds % 60
+    timers[#timers + 1] = string.format("%d:%02d", m, s)
     timerSeconds[#timerSeconds + 1] = seconds
-    timerValues[#timerValues + 1] = string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
 end
 
-local fields = {
-    model = 2, -- S1 V2
+local state = {
+    model = 2,
     color = 1,
-    timer = 10, -- 5:00
-    att = 1,
-    bank = 1,
-    hold = 16, -- SF UP
-    reset = 7, -- SC UP
+    timer = 10,
+    switches = { atti=nil, bank=nil, hold=nil, reset=nil },
+    capture = {
+        active=nil,
+        sources={},
+        snapshot={},
+        candidateName=nil,
+        candidatePosition=nil,
+        candidateInitial=nil,
+        candidateSince=0,
+    },
+    receiver = {
+        id=nil,
+        status="not-scanned",
+        scannedModels=0,
+        matchingModels=0,
+        usedIds=0,
+        maskLo=0,
+        maskHi=0,
+    },
+    apply = { status="not-run", error=nil },
 }
 
-local function selectedModel()
-    return models[fields.model]
+local switchRows = {
+    { key="atti", label="ATTI" },
+    { key="bank", label="BANK" },
+    { key="hold", label="THROTTLE HOLD" },
+    { key="reset", label="TIMER RESET" },
+}
+
+local function profileReady()
+    local m=models[state.model]
+    return m == "S1 V2" or m == "S2 MAX"
 end
 
-local function clean(value)
-    return string.gsub(tostring(value or ""), "[\r\n]", "")
+local function currentColors()
+    if models[state.model] == "RS4 Venom" then return rs4VenomColors end
+    return standardColors
 end
 
-local function fieldId(name)
-    local info = getFieldInfo and getFieldInfo(name)
-    if not info or info.id == nil then error("Missing EdgeTX source: " .. name) end
-    return info.id
+local function colorCode(color)
+    if color == "Orange" then return "OR" end
+    if color == "Blue" then return "BL" end
+    if color == "Purple" then return "PU" end
+    if color == "Green" then return "GR" end
+    return nil
 end
 
-local function sourceIndex(name)
-    local index = type(getSourceIndex) == "function" and getSourceIndex(name) or 0
-    if index and index ~= 0 then return index end
-    return fieldId(string.lower(name))
+local function previewImagePath()
+    local modelName = models[state.model]
+    local code = colorCode(currentColors()[state.color])
+    local prefix = nil
+    if modelName == "S1 V2" then prefix = "GKS1"
+    elseif modelName == "S2 MAX" then prefix = "GKS2" end
+    if not prefix or not code then return nil end
+
+    local suffix = wizard.isLargeLCD() and "_800.png" or ".png"
+    local path = IMAGE_DIR .. prefix .. code .. suffix
+    if type(fstat) == "function" and not fstat(path) then return nil end
+    return path
 end
 
-local function switchPosition(name, position)
-    if type(getSwitchIndex) ~= "function" then error("getSwitchIndex unavailable") end
-    local suffix = position == "up" and "\194\130"
-        or (position == "mid" and "-" or "\194\131")
-    local index = getSwitchIndex(name .. suffix)
-    if not index or index == 0 then error("Cannot resolve " .. name .. " " .. position) end
-    return index
+local function choiceRow(title, values, getter, setter)
+    return wizard.settings({
+        title=title,
+        children={{ type="choice", values=values, get=getter, set=setter }},
+    })
 end
 
-local function selectedPosition(index)
-    local item = switchPositionData[index]
-    if not item then error("Invalid switch selection") end
-    return item.name, item.position
+local function label(text)
+    return {
+        type="label",
+        w=lvgl.PERCENT_SIZE + 100,
+        color=wizard.textColor(),
+        font=wizard.metrics().fieldFont,
+        text=text,
+    }
 end
 
-local function clearChannel(channel)
-    if model.deleteMixes then
-        model.deleteMixes(channel)
+local function sideLabel(text)
+    local inset=wizard.isLargeLCD() and 14 or 8
+    return {
+        type="label",
+        x=inset,
+        w=lvgl.PERCENT_SIZE + 94,
+        color=wizard.textColor(),
+        font=wizard.metrics().fieldFont,
+        text=text,
+    }
+end
+
+local function previewChildren()
+    local path = previewImagePath()
+    if path then
+        return { wizard.image({ file=path, visibleFunc=function() return true end }) }
+    end
+    return { sideLabel("Model preview"), sideLabel("Matching image not installed yet.") }
+end
+
+local function sourceExists(name)
+    if type(getFieldInfo) ~= "function" then return false end
+    local info = getFieldInfo(string.lower(name))
+    return info and info.id ~= nil
+end
+
+local function readPhysicalSwitch(name)
+    if type(getValue) ~= "function" then return nil end
+    local value = getValue(string.lower(name))
+    if type(value) ~= "number" then return nil end
+    return value
+end
+
+local function positionFromValue(value)
+    if value < -512 then return "up" end
+    if value > 512 then return "down" end
+    return "mid"
+end
+
+local function positionDisplay(position)
+    if position == "up" then return "UP" end
+    if position == "down" then return "DOWN" end
+    return "MID"
+end
+
+local function resetCaptureCandidate()
+    local c = state.capture
+    c.candidateName=nil
+    c.candidatePosition=nil
+    c.candidateInitial=nil
+    c.candidateSince=0
+end
+
+local function buildSwitchSources()
+    local sources = state.capture.sources
+    for i=#sources,1,-1 do sources[i]=nil end
+    local names = {"SA","SB","SC","SD","SE","SF","SG","SH","SI","SJ"}
+    for i=1,#names do
+        if sourceExists(names[i]) then sources[#sources+1]=names[i] end
+    end
+    if #sources == 0 then
+        sources[1]="SA"; sources[2]="SB"; sources[3]="SC"; sources[4]="SD"
+        sources[5]="SE"; sources[6]="SF"; sources[7]="SG"; sources[8]="SH"
+    end
+end
+
+local function snapshotSwitches()
+    local snap = state.capture.snapshot
+    for k in pairs(snap) do snap[k]=nil end
+    resetCaptureCandidate()
+    for i=1,#state.capture.sources do
+        local name = state.capture.sources[i]
+        snap[name] = readPhysicalSwitch(name)
+    end
+end
+
+local function assignmentDisplay(key)
+    if state.capture.active == key then return "MOVE SWITCH..." end
+    local a = state.switches[key]
+    if not a then return "TAP TO ASSIGN" end
+    if key == "bank" then return a.name end
+    return a.name .. " " .. positionDisplay(a.position)
+end
+
+local function allSwitchesAssigned()
+    local s=state.switches
+    return s.atti and s.bank and s.hold and s.reset
+end
+
+local function setSwitchPageRingState(mode)
+    if mode == switchLedState then return end
+    if not LED_STRIP_LENGTH or LED_STRIP_LENGTH <= 0
+        or type(setRGBLedColor) ~= "function"
+        or type(applyRGBLedColors) ~= "function" then
+        switchLedState = mode
         return
     end
-    if not model.getMixesCount or not model.deleteMix then error("Mix delete API unavailable") end
-    for line = model.getMixesCount(channel) - 1, 0, -1 do model.deleteMix(channel, line) end
+
+    -- EdgeTX 2.12 exposes the decorative/gimbal LEDs first and, where present,
+    -- the six SW1-SW6 LEDs last. This page owns only the gimbal/decorative LEDs;
+    -- leave SW1-SW6 untouched for the model/widget to use later.
+    local ringCount = LED_STRIP_LENGTH >= 26 and (LED_STRIP_LENGTH - 6) or LED_STRIP_LENGTH
+    local r,g,b = 0,0,0
+    if mode == "waiting" then
+        r = 255
+    elseif mode == "ready" then
+        g = 255
+    end
+
+    for id=0,ringCount-1 do
+        setRGBLedColor(id,r,g,b)
+    end
+    applyRGBLedColors()
+    switchLedState = mode
 end
 
-local TRIM_MODE_NONE = 31
-local FLIGHT_MODE_COUNT = 9
+local function receiverIdRequired()
+    local m=models[state.model]
+    return m == "S1 V2" or m == "S2 MAX"
+end
 
-local function disableAllTrims()
-    if not model or type(model.setFlightMode) ~= "function"
-        or type(model.getFlightMode) ~= "function" then
-        error("This EdgeTX build cannot disable the trim keys")
+local function cleanScalar(v)
+    if not v then return nil end
+    v = string.match(v, "^%s*(.-)%s*$") or v
+    local first,last=string.sub(v,1,1),string.sub(v,-1)
+    if (first=='\"' and last=='\"') or (first=="'" and last=="'") then
+        v=string.sub(v,2,-2)
     end
+    return v
+end
 
-    local trimValues = { 0, 0, 0, 0, 0, 0 }
-    local trimModes = {
-        TRIM_MODE_NONE, TRIM_MODE_NONE, TRIM_MODE_NONE,
-        TRIM_MODE_NONE, TRIM_MODE_NONE, TRIM_MODE_NONE
-    }
+local function scanRfIdentity(path)
+    if not io or type(io.open)~="function" or type(io.read)~="function" then return false end
+    local f=io.open(path,"r")
+    if not f then return false end
 
-    for flightMode = 0, FLIGHT_MODE_COUNT - 1 do
-        local result = model.setFlightMode(flightMode, {
-            trimsValues = trimValues,
-            trimsModes = trimModes
-        })
-        if result ~= 0 then error("Cannot disable trims in flight mode " .. tostring(flightMode)) end
-    end
+    local modelId,rfType,rfSubType=nil,nil,TARGET_RF_SUBTYPE
+    local section=nil
+    local sectionIndent=-1
+    local slotActive=false
+    local slotIndent=-1
+    local buffer=""
 
-    for flightMode = 0, FLIGHT_MODE_COUNT - 1 do
-        local info = model.getFlightMode(flightMode)
-        if type(info) ~= "table" or type(info.trimsModes) ~= "table" or #info.trimsModes == 0 then
-            error("Cannot verify trims in flight mode " .. tostring(flightMode))
+    local function processLine(line)
+        local spaces,body=string.match(line,"^(%s*)(.-)%s*\r?$")
+        spaces=spaces or ""; body=body or ""
+        if body=="" then return end
+        local indent=#spaces
+
+        if section and indent<=sectionIndent then
+            section=nil; slotActive=false; slotIndent=-1
+        elseif section and slotActive and indent<=slotIndent then
+            slotActive=false; slotIndent=-1
         end
-        for _, mode in ipairs(info.trimsModes) do
-            if tonumber(mode) ~= TRIM_MODE_NONE then
-                error("Trim keys remain enabled in flight mode " .. tostring(flightMode))
+
+        if not section then
+            if body=="modelId:" then
+                section="modelId"; sectionIndent=indent; return
+            elseif body=="moduleData:" then
+                section="moduleData"; sectionIndent=indent; return
+            else
+                return
             end
         end
-    end
-end
 
-local function disableFunctionSwitchWarnings()
-    if not model or type(model.setSwitchWarning) ~= "function" then return false end
-    for index = 1, 6 do
-        local ok = pcall(model.setSwitchWarning, "SW" .. tostring(index), 0)
-        if not ok then return false end
-    end
-    return true
-end
+        if not slotActive then
+            local slot=string.match(body,"^(%d+):$")
+            if slot and tonumber(slot)==TARGET_MODULE_INDEX and indent>sectionIndent then
+                slotActive=true; slotIndent=indent
+            end
+            return
+        end
 
-local function modelConfigKey(info)
-    local raw = type(info) == "table" and (info.filename or info.name) or "model"
-    local key = string.lower(clean(raw))
-    key = string.gsub(key, "[^%w_-]", "_")
-    if key == "" then key = "model" end
-    return key
-end
-
-local function saveDashboardSwitches(info, bankName, holdSwitch, resetSwitch)
-    local content = table.concat({
-        "version=1",
-        "bank_source=" .. tostring(sourceIndex(bankName) or 0),
-        "bank_name=" .. clean(bankName),
-        "hold_switch=" .. tostring(holdSwitch or 0),
-        "reset_switch=" .. tostring(resetSwitch or 0),
-        ""
-    }, "\n")
-
-    local paths = {
-        AUTO_CFG_PREFIX .. modelConfigKey(info) .. ".cfg",
-        AUTO_CFG_PREFIX .. modelConfigKey({ name = info and info.name or "model" }) .. ".cfg",
-        LEGACY_AUTO_CFG_PREFIX .. modelConfigKey(info) .. ".cfg",
-        LEGACY_AUTO_CFG_PREFIX .. modelConfigKey({ name = info and info.name or "model" }) .. ".cfg",
-    }
-
-    local written = {}
-    for _, path in ipairs(paths) do
-        if not written[path] then
-            local file = io and io.open and io.open(path, "w") or nil
-            if not file then error("Cannot save dashboard switch settings: " .. path) end
-            io.write(file, content)
-            io.close(file)
-            written[path] = true
+        if section=="modelId" then
+            local v=string.match(body,"^val:%s*(%d+)%s*$")
+            if v then
+                local id=tonumber(v)
+                if id and id>=0 and id<=MAX_RECEIVER_ID then modelId=id end
+            end
+        else
+            local v=string.match(body,"^type:%s*(.-)%s*$")
+            if v then rfType=cleanScalar(v); return end
+            v=string.match(body,"^subType:%s*(.-)%s*$")
+            if v then rfSubType=cleanScalar(v) or TARGET_RF_SUBTYPE end
         end
     end
+
+    while true do
+        local chunk=io.read(f,256)
+        if not chunk or #chunk==0 then break end
+        buffer=buffer..chunk
+        local start=1
+        while true do
+            local nl=string.find(buffer,"\n",start,true)
+            if not nl then
+                buffer=string.sub(buffer,start)
+                break
+            end
+            processLine(string.sub(buffer,start,nl-1))
+            start=nl+1
+        end
+    end
+    if #buffer>0 then processLine(buffer) end
+    io.close(f)
+    return true,modelId,rfType,rfSubType
 end
 
-local function telemetrySwitch()
-    for _, name in ipairs({ "TELE", "Telemetry", "TELEM" }) do
-        local candidate = getSwitchIndex(name)
-        if candidate and candidate ~= 0 then return candidate end
+local function markId(id)
+    if id<32 then
+        state.receiver.maskLo=bit32.bor(state.receiver.maskLo,bit32.lshift(1,id))
+    else
+        state.receiver.maskHi=bit32.bor(state.receiver.maskHi,bit32.lshift(1,id-32))
     end
-    return 0
 end
 
-local function applyVerifiedModel()
-    local selected = selectedModel()
-    if not selected.profileReady then
-        error(selected.name .. " throttle/model defaults are not yet verified")
+local function idUsed(id)
+    if id<32 then
+        return bit32.band(state.receiver.maskLo,bit32.lshift(1,id))~=0
+    end
+    return bit32.band(state.receiver.maskHi,bit32.lshift(1,id-32))~=0
+end
+
+local function allocateReceiverId()
+    local r=state.receiver
+    r.id=nil; r.status="scan-error"; r.scannedModels=0; r.matchingModels=0; r.usedIds=0
+    r.maskLo=0; r.maskHi=0
+    if type(dir)~="function" then return end
+
+    local currentFilename=""
+    if model and type(model.getInfo)=="function" then
+        local info=model.getInfo()
+        if info and type(info.filename)=="string" then
+            currentFilename=string.match(info.filename,"([^/\\]+)$") or info.filename
+        end
     end
 
-    local attName, attPosition = selectedPosition(fields.att)
-    local holdName, holdPosition = selectedPosition(fields.hold)
-    local resetName, resetPosition = selectedPosition(fields.reset)
-    local bankName = switchNames[fields.bank]
+    local nextFile=dir(MODELS_DIR)
+    if type(nextFile)~="function" then return end
 
-    local poseSwitch = switchPosition(attName, attPosition)
-    local holdSwitch = switchPosition(holdName, holdPosition)
-    local resetSwitch = switchPosition(resetName, resetPosition)
-    local bankUp = switchPosition(bankName, "up")
-    local bankMid = switchPosition(bankName, "mid")
-    local bankDown = switchPosition(bankName, "down")
-
-    local logicalTimer = getSwitchIndex("L01") or getSwitchIndex("L1")
-    if not logicalTimer or logicalTimer == 0 then error("Cannot resolve logical switch L01") end
-    local logicalFlight = logicalTimer + 1
-
-    local srcAil = fieldId("ail")
-    local srcEle = fieldId("ele")
-    local srcThr = fieldId("thr")
-    local srcRud = fieldId("rud")
-    local srcMax = fieldId("max")
-    local srcCh3 = fieldId("ch3")
-    local srcS1 = sourceIndex("S1")
-    local srcS2 = sourceIndex("S2")
-
-    local alwaysOn = getSwitchIndex("ON")
-    if not alwaysOn or alwaysOn == 0 then error("Cannot resolve ON switch") end
-
-    local telemetryOn = telemetrySwitch()
-    if telemetryOn == 0 then error("Cannot resolve EdgeTX TELE switch") end
-    if type(FUNC_LOGS) ~= "number" then error("This EdgeTX build does not expose SD Logs") end
-    if type(FUNC_PLAY_TRACK) ~= "number" then error("This EdgeTX build does not expose Play Track") end
-
-    for channel = 0, 5 do clearChannel(channel) end
-
-    -- Exact S1 V2 / S2 MAX throttle curves currently proven in GooskySetup.
-    assert(model.setCurve(0, { name = "THR1", y = { -100, 25, 25, 25, 25 } }) == 0)
-    assert(model.setCurve(1, { name = "THR2", y = { 35, 35, 35, 35, 35 } }) == 0)
-    assert(model.setCurve(2, { name = "THR3", y = { 45, 45, 45, 45, 45 } }) == 0)
-
-    model.insertMix(0, 0, { source = srcAil, name = "Aileron", weight = 100, carryTrim = false })
-    model.insertMix(1, 0, { source = srcEle, name = "Elevator", weight = 100, carryTrim = false })
-    model.insertMix(2, 0, { source = srcThr, name = "Bank 1", weight = 100, carryTrim = false, curveType = 3, curveValue = 1 })
-    model.insertMix(2, 1, { source = srcThr, name = "Bank 2", weight = 100, carryTrim = false, switch = bankMid, multiplex = 2, curveType = 3, curveValue = 2 })
-    model.insertMix(2, 2, { source = srcThr, name = "Bank 3", weight = 100, carryTrim = false, switch = bankDown, multiplex = 2, curveType = 3, curveValue = 3 })
-    model.insertMix(3, 0, { source = srcRud, name = "Rudder", weight = 100, carryTrim = false })
-    model.insertMix(4, 0, { source = srcMax, name = "3D", weight = -100, carryTrim = false })
-    model.insertMix(4, 1, { source = srcMax, name = "ATT", weight = 100, carryTrim = false, switch = poseSwitch, multiplex = 2 })
-    model.insertMix(5, 0, { source = srcThr, name = "Collective", weight = 100, carryTrim = false })
-
-    disableAllTrims()
-
-    for channel, name in ipairs({ "AIL", "ELE", "MOTOR", "RUD", "POSE", "PITCH" }) do
-        model.setOutput(channel - 1, { name = name })
+    local filename=nextFile()
+    while filename do
+        if type(filename)=="string" and string.match(string.lower(filename),"%.yml$") and filename~=currentFilename then
+            local ok,id,rfType,rfSubType=scanRfIdentity(MODELS_DIR.."/"..filename)
+            if not ok then return end
+            r.scannedModels=r.scannedModels+1
+            if rfType==TARGET_RF_TYPE and tostring(rfSubType or TARGET_RF_SUBTYPE)==TARGET_RF_SUBTYPE then
+                r.matchingModels=r.matchingModels+1
+                if id~=nil and id>0 then markId(id) end
+            end
+        end
+        filename=nextFile()
     end
 
-    -- L01: commanded motor throttle >20% while HOLD is released.
-    -- L02: L01 plus live telemetry. This preserves current GooskySetup timer
-    -- semantics for the two telemetry-capable verified models.
-    model.setLogicalSwitch(0, {
-        func = LS_FUNC_VPOS,
-        v1 = srcCh3,
-        v2 = 20,
-        ["and"] = -holdSwitch,
-        delay = 0,
-        duration = 0
-    })
-    model.setLogicalSwitch(1, {
-        func = LS_FUNC_AND,
-        v1 = logicalTimer,
-        v2 = telemetryOn,
-        ["and"] = 0,
-        delay = 0,
-        duration = 0
-    })
-
-    local seconds = timerSeconds[fields.timer]
-    model.setTimer(0, {
-        mode = logicalFlight,
-        start = seconds,
-        value = seconds,
-        countdownBeep = 2,
-        minuteBeep = false,
-        persistent = 0,
-        name = "LIMIT"
-    })
-    model.setTimer(1, {
-        mode = logicalFlight,
-        start = 0,
-        value = 0,
-        countdownBeep = 0,
-        minuteBeep = false,
-        persistent = 0,
-        name = "FLIGHT"
-    })
-
-    model.setCustomFunction(0, {
-        switch = holdSwitch,
-        func = FUNC_OVERRIDE_CHANNEL,
-        param = 2,
-        value = -100,
-        mode = 0,
-        active = 1
-    })
-
-    model.setCustomFunction(1, { switch = resetSwitch, func = FUNC_RESET, param = 0, value = 0, mode = 0, active = 1 })
-    model.setCustomFunction(2, { switch = resetSwitch, func = FUNC_RESET, param = 0, value = 1, mode = 0, active = 1 })
-    model.setCustomFunction(3, { switch = alwaysOn, func = FUNC_BACKLIGHT, param = 0, value = srcS1, mode = 0, active = 1 })
-    model.setCustomFunction(4, { switch = alwaysOn, func = FUNC_VOLUME, param = 0, value = srcS2, mode = 0, active = 1 })
-    model.setCustomFunction(5, { switch = telemetryOn, func = FUNC_LOGS, param = 10, value = 0, mode = 0, active = 1 })
-
-    local function setVoiceAlert(index, switch, track)
-        model.setCustomFunction(index, {
-            switch = switch,
-            func = FUNC_PLAY_TRACK,
-            name = track,
-            repetition = -1,
-            active = 1
-        })
+    for id=1,MAX_RECEIVER_ID do if idUsed(id) then r.usedIds=r.usedIds+1 end end
+    for id=1,MAX_RECEIVER_ID do
+        if not idUsed(id) then r.id=id; r.status="ok"; break end
     end
+    if r.id==nil then r.status="full" end
+    filename=nil; nextFile=nil
+end
 
-    setVoiceAlert(6, holdSwitch, "thrhld")
-    setVoiceAlert(7, -holdSwitch, "thract")
-    setVoiceAlert(8, bankUp, "bank-1")
-    setVoiceAlert(9, bankMid, "bank-2")
-    setVoiceAlert(10, bankDown, "bank-3")
-    setVoiceAlert(11, -poseSwitch, "3d-mod")
-    setVoiceAlert(12, poseSwitch, "sxrstb")
-    setVoiceAlert(13, resetSwitch, "timrs1")
+local function receiverIdDisplay()
+    if not receiverIdRequired() then return "N/A" end
+    local r=state.receiver
+    if r.status=="ok" and r.id~=nil then return r.id.." AUTO" end
+    if r.status=="full" then return "NONE FREE" end
+    return "SCAN ERROR"
+end
 
-    -- Existing proven EdgeTX module setup for the native ELRS S1 V2/S2 MAX.
-    -- This only selects CRSF/8ch; ExpressLRS packet rate, telemetry ratio,
-    -- power and dynamic-power check/fix are deliberately NOT part of wizard v1.
-    model.setModule(0, { Type = 5, firstChannel = 0, channelsCount = 8 })
-
-    local color = colors[fields.color]
-    local info = model.getInfo()
-    info.name = selected.name .. " " .. color.name
-    if selected.imagePrefix then info.bitmap = selected.imagePrefix .. color.suffix .. ".png" end
-    info.jitterFilter = 1 -- per-model ADC filter override OFF
-    model.setInfo(info)
-
-    disableFunctionSwitchWarnings()
-    saveDashboardSwitches(info, bankName, holdSwitch, resetSwitch)
+local function receiverIdReady()
+    return (not receiverIdRequired()) or (state.receiver.status=="ok" and state.receiver.id~=nil)
 end
 
 local function selectPage(step)
-    local nextPage = page + step
-    if nextPage < 1 or nextPage > #pages then return end
-    page = nextPage
+    local target=page+step
+    if target<1 or target>#pages then return end
+    state.capture.active=nil
+    resetCaptureCandidate()
+    page=target
     pages[page]()
-end
-
-local function choiceRow(title, values, getFn, setFn)
-    return wizard.settings({
-        title = title,
-        children = {
-            {
-                type = "choice",
-                values = values,
-                get = getFn,
-                set = setFn,
-            },
-        },
-    })
-end
-
-local function textBlock(text, color)
-    return {
-        type = "label",
-        w = lvgl.PERCENT_SIZE + 100,
-        color = color,
-        text = text,
-    }
 end
 
 local function modelPage()
     lvgl.clear()
-    local modelNames = {}
-    local colorNames = {}
-    for _, item in ipairs(models) do modelNames[#modelNames + 1] = item.name end
-    for _, item in ipairs(colors) do colorNames[#colorNames + 1] = item.name end
-
-    local children1 = {
-        choiceRow("Goosky model", modelNames,
-            function() return fields.model end,
-            function(value) fields.model = value end),
-        choiceRow("Color", colorNames,
-            function() return fields.color end,
-            function(value) fields.color = value end),
-        choiceRow("Timer 1 limit", timerValues,
-            function() return fields.timer end,
-            function(value) fields.timer = value end),
-    }
-
-    local children2 = {
-        textBlock("Supported list: S1 V1, S1 V2, S2 Legend V1, S2 MAX, RS4 Venom."),
-        textBlock("S1 V2 and S2 MAX currently have verified model-write profiles."),
-        textBlock("ELRS settings check/fix is outside Wizard v1."),
-    }
-
+    local colors=currentColors()
     lvgl.build(wizard.page({
-        title = TITLE,
-        subtitle = "Model",
-        hasPrevious = false,
-        hasNext = true,
-        nextFunc = function() selectPage(1) end,
-        children1 = children1,
-        children2 = children2,
+        title=TITLE, subtitle="Model Setup", hasPrevious=false, hasNext=true,
+        nextLabel="NEXT  >", nextFunc=function() selectPage(1) end,
+        children1={
+            choiceRow("Goosky model",models,function() return state.model end,function(value)
+                if state.model~=value then
+                    state.model=value; state.color=1; state.apply.status="not-run"; modelPage()
+                end
+            end),
+            choiceRow("Color",colors,function() return state.color end,function(value)
+                state.color=value; state.apply.status="not-run"
+            end),
+            choiceRow("Flight timer",timers,function() return state.timer end,function(value)
+                state.timer=value; state.apply.status="not-run"
+            end),
+        },
+        children2={
+            sideLabel("Select the helicopter, color and flight timer."),
+            sideLabel("Switches are assigned on the next page."),
+            sideLabel(profileReady() and "Verified profile: ready to configure." or "Profile visible for future support; programming is blocked."),
+        },
     }))
 end
 
-local function switchesPage()
+local function switchCaptureRow(row)
+    local metrics=wizard.metrics()
+    local rowH=metrics.large and 58 or 42
+    local captureH=metrics.large and 50 or 36
+    local captureW=math.floor(LCD_W*(metrics.large and 0.60 or 0.62))
+    local key=row.key
+    return {
+        type="rectangle", w=lvgl.PERCENT_SIZE+100, h=rowH, thickness=0,
+        flexPad=0, flexFlow=lvgl.FLOW_ROW, align=LEFT|VCENTER,
+        children={
+            { type="rectangle", w=lvgl.PERCENT_SIZE+34, h=rowH, thickness=0, align=LEFT|VCENTER,
+              children={{ type="label", x=metrics.large and 18 or 10, w=lvgl.PERCENT_SIZE+92,
+                          color=wizard.textColor(), text=row.label }} },
+            { type="rectangle", w=lvgl.PERCENT_SIZE+66, h=rowH, thickness=0, align=LEFT|VCENTER,
+              children={{ type="button", x=0, y=math.floor((rowH-captureH)/2), w=captureW, h=captureH,
+                          text=function() return assignmentDisplay(key) end,
+                          color=function() return state.capture.active==key and ORANGE or DARKGREY end,
+                          textColor=function() return state.capture.active==key and BLACK or WHITE end,
+                          cornerRadius=metrics.large and 12 or 8,
+                          press=function()
+                              state.capture.active=key
+                              snapshotSwitches()
+                          end }} },
+        },
+    }
+end
+
+switchPage=function()
     lvgl.clear()
-
-    local children1 = {
-        choiceRow("ATT switch / position", switchPositions,
-            function() return fields.att end,
-            function(value) fields.att = value end),
-        choiceRow("BANK switch", switchNames,
-            function() return fields.bank end,
-            function(value) fields.bank = value end),
-        choiceRow("HOLD switch / position", switchPositions,
-            function() return fields.hold end,
-            function(value) fields.hold = value end),
-        choiceRow("Timer reset / position", switchPositions,
-            function() return fields.reset end,
-            function(value) fields.reset = value end),
-    }
-
-    local children2 = {
-        textBlock("Wizard v1 starts with standard EdgeTX choices."),
-        textBlock("Switch-movement auto-detection from GooskySetup is the next parity step."),
-    }
-
-    lvgl.build(wizard.page({
-        title = TITLE,
-        subtitle = "Switches",
-        hasPrevious = true,
-        hasNext = true,
-        previousFunc = function() selectPage(-1) end,
-        nextFunc = function() selectPage(1) end,
-        children1 = children1,
-        children2 = children2,
+    local children={}
+    for i=1,#switchRows do children[#children+1]=switchCaptureRow(switchRows[i]) end
+    children[#children+1]=label("Tap a box, then move only the switch you want to assign.")
+    lvgl.build(wizard.fullPage({
+        title=TITLE, subtitle="Switch Assignment", hasPrevious=true,
+        hasNext=true,
+        previousLabel="<  BACK",
+        nextLabel=function()
+            if allSwitchesAssigned() and state.capture.active==nil then return "NEXT  >" end
+            return "ASSIGN"
+        end,
+        previousFunc=function() selectPage(-1) end,
+        nextFunc=function()
+            if allSwitchesAssigned() and state.capture.active==nil then selectPage(1) end
+        end,
+        children=children,
     }))
 end
 
-local function summaryPage()
-    lvgl.clear()
-    local selected = selectedModel()
-
-    local rows = {
-        wizard.summaryLine("Model", nil, selected.name),
-        wizard.summaryLine("Color", nil, colors[fields.color].name),
-        wizard.summaryLine("RF interface", nil, selected.rf),
-        wizard.summaryLine("Telemetry", nil, selected.telemetry and "Supported" or "Not available"),
-        wizard.summaryLine("ATT", nil, switchPositions[fields.att]),
-        wizard.summaryLine("BANK", nil, switchNames[fields.bank]),
-        wizard.summaryLine("HOLD", nil, switchPositions[fields.hold]),
-        wizard.summaryLine("RESET", nil, switchPositions[fields.reset]),
-        wizard.summaryLine("Timer", nil, timerValues[fields.timer]),
-    }
-
-    local children2
-    if selected.profileReady then
-        children2 = {
-            textBlock("NEXT WILL MODIFY THE CURRENT MODEL."),
-            textBlock("Writes CH1-CH6, curves, L01-L02, timers and special functions."),
-            textBlock("MOTOR MUST BE DISCONNECTED."),
-        }
-    else
-        children2 = {
-            textBlock("Channel layout is known."),
-            textBlock("Throttle/model defaults are not yet verified, so this build will NOT modify the model."),
-        }
-    end
-
-    lvgl.build(wizard.page({
-        title = TITLE,
-        subtitle = "Review",
-        hasPrevious = true,
-        hasNext = true,
-        previousFunc = function() selectPage(-1) end,
-        nextFunc = function() selectPage(1) end,
-        children1 = rows,
-        children2 = children2,
-    }))
+local function finishCapture(name,position)
+    local key=state.capture.active
+    if not key then return end
+    state.switches[key]={name=name,position=position}
+    state.apply.status="not-run"
+    state.capture.active=nil
+    resetCaptureCandidate()
 end
 
-local function resultPage()
-    local selected = selectedModel()
+local function captureMovedSwitch()
+    local c=state.capture
+    local key=c.active
+    if not key then return end
+    local now=getTime()
 
-    if selected.profileReady and applyResult == nil then
-        local ok, err = pcall(applyVerifiedModel)
-        if ok then
-            applyResult = true
-        else
-            applyResult = false
-            applyError = tostring(err)
+    if not c.candidateName then
+        for i=1,#c.sources do
+            local name=c.sources[i]
+            local current=readPhysicalSwitch(name)
+            local previous=c.snapshot[name]
+            if current~=nil and previous~=nil and math.abs(current-previous)>256 then
+                c.candidateName=name
+                c.candidateInitial=positionFromValue(previous)
+                c.candidatePosition=positionFromValue(current)
+                c.candidateSince=now
+                break
+            end
+            c.snapshot[name]=current
         end
-    elseif not selected.profileReady then
-        applyResult = nil
-        applyError = nil
+        return
     end
 
+    local current=readPhysicalSwitch(c.candidateName)
+    if current==nil then return end
+    local pos=positionFromValue(current)
+    if pos~=c.candidatePosition then
+        if (key=="hold" or key=="reset") and pos==c.candidateInitial then
+            finishCapture(c.candidateName,c.candidatePosition)
+            return
+        end
+        c.candidatePosition=pos
+        c.candidateSince=now
+        return
+    end
+
+    if now-c.candidateSince>=SWITCH_SETTLE_TICKS then
+        finishCapture(c.candidateName,c.candidatePosition)
+    end
+end
+
+local function reviewPage()
     lvgl.clear()
-
-    local children1 = {}
-    local children2 = {}
-
-    if not selected.profileReady then
-        children1 = {
-            textBlock(selected.name .. " selected."),
-            textBlock("No model changes were made."),
-        }
-        children2 = {
-            textBlock("Shared CH1-CH6 layout is recorded."),
-            textBlock("Model-specific throttle/governor defaults must be verified before enabling writes."),
-        }
-    elseif applyResult then
-        children1 = {
-            textBlock("Model configuration applied successfully."),
-            textBlock(selected.name .. " / " .. colors[fields.color].name),
-            textBlock("ELRS settings were NOT checked or changed."),
-        }
-        children2 = {
-            textBlock("Manual step: MDL > Customizable Switches > set SW1-SW6 Type to NONE."),
-            textBlock("Then connect the helicopter and discover telemetry sensors."),
-            textBlock("Review outputs before flight. Motor must remain disconnected during bench checks."),
-        }
+    if receiverIdRequired() then allocateReceiverId() end
+    local colors=currentColors()
+    local children2=previewChildren()
+    if profileReady() then
+        children2[#children2+1]=sideLabel("Safety: disconnect motor or remove blades before testing.")
     else
-        children1 = {
-            textBlock("MODEL SETUP FAILED"),
-            textBlock(clean(applyError or "Unknown error")),
-        }
-        children2 = {
-            textBlock("The model may be partially changed."),
-            textBlock("Review all mixes, outputs and safety functions before use."),
-        }
+        children2[#children2+1]=sideLabel("PROFILE NOT VERIFIED")
+        children2[#children2+1]=sideLabel("Programming is intentionally blocked for this model.")
     end
 
     lvgl.build(wizard.page({
-        title = TITLE,
-        subtitle = selected.profileReady and "Result" or "Profile Pending",
-        hasPrevious = false,
-        hasNext = false,
-        children1 = children1,
-        children2 = children2,
+        title=TITLE, subtitle="Review / Confirm", hasPrevious=true,
+        hasNext=profileReady() and receiverIdReady(),
+        previousLabel="<  BACK", nextLabel="CONFIRM",
+        previousFunc=function() selectPage(-1) end,
+        nextFunc=function() selectPage(1) end,
+        children1={
+            wizard.summaryLine("Model",nil,models[state.model]),
+            wizard.summaryLine("Color",nil,colors[state.color]),
+            wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
+            wizard.summaryLine("Timer",nil,timers[state.timer]),
+            wizard.summaryLine("ATTI",nil,assignmentDisplay("atti")),
+            wizard.summaryLine("BANK",nil,assignmentDisplay("bank")),
+            wizard.summaryLine("HOLD",nil,assignmentDisplay("hold")),
+            wizard.summaryLine("RESET",nil,assignmentDisplay("reset")),
+        },
+        children2=children2,
+    }))
+end
+
+local function runApplyBackend()
+    if state.apply.status=="success" then return true end
+    state.apply.status="running"
+    state.apply.error=nil
+
+    if type(collectgarbage)=="function" then collectgarbage("collect") end
+    local loader=loadScript(RUN_DIR .. "/wizard-apply.lua")
+    if type(loader)~="function" then
+        state.apply.status="failed"
+        state.apply.error="Cannot load wizard-apply.lua"
+        return false
+    end
+
+    local apply=loader()
+    loader=nil
+    if type(apply)~="function" then
+        state.apply.status="failed"
+        state.apply.error="Invalid wizard apply backend"
+        return false
+    end
+
+    local payload={
+        modelName=models[state.model],
+        color=currentColors()[state.color],
+        timerSeconds=timerSeconds[state.timer],
+        receiverId=state.receiver.id,
+        atti=state.switches.atti,
+        bank=state.switches.bank,
+        hold=state.switches.hold,
+        reset=state.switches.reset,
+    }
+    local ok,result=pcall(apply,payload)
+    apply=nil; payload=nil
+    if type(collectgarbage)=="function" then collectgarbage("collect") end
+
+    if not ok then
+        state.apply.status="failed"
+        state.apply.error=tostring(result or "Unknown model programming error")
+        return false
+    end
+    state.apply.status="success"
+    return true
+end
+
+completePage=function()
+    lvgl.clear()
+    if not profileReady() then
+        state.apply.status="failed"
+        state.apply.error="Selected model profile is not yet verified"
+    elseif not receiverIdReady() then
+        state.apply.status="failed"
+        state.apply.error="No valid Receiver ID is available"
+    else
+        runApplyBackend()
+    end
+
+    local colors=currentColors()
+    local ok=state.apply.status=="success"
+    local children2=previewChildren()
+    children2[#children2+1]=sideLabel(ok and "MODEL PROGRAMMED" or "PROGRAMMING FAILED")
+    if ok then
+        children2[#children2+1]=sideLabel("Verify controls, HOLD, banks and ATT before flight.")
+        children2[#children2+1]=sideLabel("Discover telemetry with the receiver powered and linked.")
+    else
+        children2[#children2+1]=sideLabel(state.apply.error or "Unknown error")
+    end
+
+    lvgl.build(wizard.page({
+        title=TITLE, subtitle=ok and "Complete" or "Error",
+        hasPrevious=not ok, hasNext=false,
+        previousLabel="<  BACK", previousFunc=function() selectPage(-1) end,
+        children1={
+            wizard.summaryLine("Model",nil,models[state.model]),
+            wizard.summaryLine("Color",nil,colors[state.color]),
+            wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
+            wizard.summaryLine("Timer",nil,timers[state.timer]),
+            wizard.summaryLine("ATTI",nil,assignmentDisplay("atti")),
+            wizard.summaryLine("BANK",nil,assignmentDisplay("bank")),
+            wizard.summaryLine("HOLD",nil,assignmentDisplay("hold")),
+            wizard.summaryLine("RESET",nil,assignmentDisplay("reset")),
+        },
+        children2=children2,
     }))
 end
 
 local function init()
-    applyResult = nil
-    applyError = nil
-    pages = {
-        modelPage,
-        switchesPage,
-        summaryPage,
-        resultPage,
-    }
-    page = 1
-    pages[page]()
+    buildSwitchSources()
+    pages={modelPage,switchPage,reviewPage,completePage}
+    page=1
+    switchLedState=nil
+    pages[1]()
 end
 
-local function run(event, touchState)
-    if event == EVT_VIRTUAL_PREV_PAGE and page > 1 and page < #pages then
-        killEvents(event)
-        selectPage(-1)
-    elseif event == EVT_VIRTUAL_NEXT_PAGE and page < #pages then
-        killEvents(event)
-        selectPage(1)
+local function run(event,touchState)
+    if page==2 then
+        if state.capture.active~=nil then captureMovedSwitch() end
+        setSwitchPageRingState(allSwitchesAssigned() and "ready" or "waiting")
+    elseif switchLedState~=nil then
+        -- Do not leave wizard-owned LED state active after the switch page.
+        setSwitchPageRingState("off")
     end
 
-    if wizard.exitWizard() == true then return 2 end
+    if event==EVT_VIRTUAL_PREV_PAGE and page>1 then
+        killEvents(event); selectPage(-1)
+    elseif event==EVT_VIRTUAL_NEXT_PAGE and page<#pages then
+        if page~=2 or allSwitchesAssigned() then killEvents(event); selectPage(1) end
+    end
+    if wizard.exitWizard() then
+        if switchLedState~=nil then setSwitchPageRingState("off") end
+        return 2
+    end
     return 0
 end
 
-return {
-    init = init,
-    run = run,
-}
+return { init=init, run=run }
