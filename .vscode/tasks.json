@@ -76,8 +76,6 @@
         "-Target",
         "mk3"
       ],
-      "dependsOrder": "sequence",
-      "dependsOn": ["EdgeTX: Run widget tests"],
       "group": {
         "kind": "build",
         "isDefault": true
@@ -99,8 +97,24 @@
         "-Target",
         "gx15"
       ],
+      "problemMatcher": []
+    },
+    {
+      "label": "EdgeTX: Test + Simulate TX16S MK3",
       "dependsOrder": "sequence",
-      "dependsOn": ["EdgeTX: Run widget tests"],
+      "dependsOn": [
+        "EdgeTX: Run widget tests",
+        "EdgeTX: Simulate TX16S MK3"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "EdgeTX: Test + Simulate GX15",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "EdgeTX: Run widget tests",
+        "EdgeTX: Simulate GX15"
+      ],
       "problemMatcher": []
     }
   ]
