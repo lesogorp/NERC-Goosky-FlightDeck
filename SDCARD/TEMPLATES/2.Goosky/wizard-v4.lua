@@ -115,12 +115,26 @@ local function label(text)
     }
 end
 
+-- Text in the right-side 40% pane needs a small gutter from the center divider,
+-- especially on 480x320 displays where starting at x=0 visually touches it.
+local function sideLabel(text)
+    local inset=wizard.isLargeLCD() and 14 or 8
+    return {
+        type="label",
+        x=inset,
+        w=lvgl.PERCENT_SIZE + 94,
+        color=wizard.textColor(),
+        font=wizard.metrics().fieldFont,
+        text=text,
+    }
+end
+
 local function previewChildren()
     local path = previewImagePath()
     if path then
         return { wizard.image({ file=path, visibleFunc=function() return true end }) }
     end
-    return { label("Model preview"), label("Matching image not installed yet.") }
+    return { sideLabel("Model preview"), sideLabel("Matching image not installed yet.") }
 end
 
 local function sourceExists(name)
@@ -378,9 +392,9 @@ local function modelPage()
             end),
         },
         children2={
-            label("Select the helicopter, color and flight timer."),
-            label("Switches are assigned on the next page."),
-            label(profileReady() and "Verified profile: ready to configure." or "Profile visible for future support; programming is blocked."),
+            sideLabel("Select the helicopter, color and flight timer."),
+            sideLabel("Switches are assigned on the next page."),
+            sideLabel(profileReady() and "Verified profile: ready to configure." or "Profile visible for future support; programming is blocked."),
         },
     }))
 end
@@ -489,17 +503,17 @@ local function reviewPage()
     local colors=currentColors()
     local children2=previewChildren()
     if profileReady() then
-        children2[#children2+1]=label("READY TO PROGRAM")
-        children2[#children2+1]=label("Safety: disconnect motor or remove blades before testing.")
+        children2[#children2+1]=sideLabel("READY TO PROGRAM")
+        children2[#children2+1]=sideLabel("Safety: disconnect motor or remove blades before testing.")
     else
-        children2[#children2+1]=label("PROFILE NOT VERIFIED")
-        children2[#children2+1]=label("Programming is intentionally blocked for this model.")
+        children2[#children2+1]=sideLabel("PROFILE NOT VERIFIED")
+        children2[#children2+1]=sideLabel("Programming is intentionally blocked for this model.")
     end
 
     lvgl.build(wizard.page({
         title=TITLE, subtitle="Review / Confirm", hasPrevious=true,
         hasNext=profileReady() and receiverIdReady(),
-        previousLabel="<  BACK", nextLabel="PROGRAM MODEL",
+        previousLabel="<  BACK", nextLabel="CONFIRM",
         previousFunc=function() selectPage(-1) end,
         nextFunc=function() selectPage(1) end,
         children1={
@@ -575,12 +589,12 @@ completePage=function()
     local colors=currentColors()
     local ok=state.apply.status=="success"
     local children2=previewChildren()
-    children2[#children2+1]=label(ok and "MODEL PROGRAMMED" or "PROGRAMMING FAILED")
+    children2[#children2+1]=sideLabel(ok and "MODEL PROGRAMMED" or "PROGRAMMING FAILED")
     if ok then
-        children2[#children2+1]=label("Verify controls, HOLD, banks and ATT before flight.")
-        children2[#children2+1]=label("Discover telemetry with the receiver powered and linked.")
+        children2[#children2+1]=sideLabel("Verify controls, HOLD, banks and ATT before flight.")
+        children2[#children2+1]=sideLabel("Discover telemetry with the receiver powered and linked.")
     else
-        children2[#children2+1]=label(state.apply.error or "Unknown error")
+        children2[#children2+1]=sideLabel(state.apply.error or "Unknown error")
     end
 
     lvgl.build(wizard.page({
