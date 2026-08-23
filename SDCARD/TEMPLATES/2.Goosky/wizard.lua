@@ -6,6 +6,7 @@
 local RUN_DIR = "/TEMPLATES/2.Goosky"
 local IMAGE_DIR = "/IMAGES/"
 local MODELS_DIR = "/MODELS"
+local ELRS_SIM_PATH = "/SCRIPTS/LIB/NERC_ELRS_SIM.lua"
 local wizard = loadScript(RUN_DIR .. "/wizard-ui.lua")()
 local elrsStageFactory = loadScript(RUN_DIR .. "/wizard-elrs.lua")()
 
@@ -27,6 +28,7 @@ local elrsStage=nil
 local wizardLedSignature = nil
 local safetyBlocked = false
 local telemetrySwitchIndex = nil
+local simulatorMode = false
 
 local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
 local standardColors = { "Orange", "Blue", "Purple" }
@@ -134,11 +136,20 @@ local function sideLabel(text)
     }
 end
 
+local function detectSimulatorMode()
+    if type(fstat) ~= "function" then return false end
+    local ok,stat=pcall(fstat,ELRS_SIM_PATH)
+    return ok and stat~=nil and stat~=false
+end
+
 -- EdgeTX exposes TELE as a native special switch backed by TELEMETRY_STREAMING().
--- This is intentionally the outermost safety gate: the wizard must not change
--- module/model settings, inspect ELRS parameters, or program a model while any
--- receiver is actively linked to the radio.
+-- This is intentionally the outermost safety gate on flight hardware. In the
+-- Companion development simulator, synthetic telemetry can assert TELE even
+-- though no helicopter exists, so the injected ELRS simulator marker disables
+-- this native TELE gate. ELRS connected/armed safety remains independently
+-- enforced by the dedicated simulated ELRS status frames.
 local function telemetryLinkActive()
+    if simulatorMode then return false end
     if type(getSwitchIndex) ~= "function" or type(getSwitchValue) ~= "function" then
         return false
     end
@@ -774,6 +785,7 @@ local function enforceSafetyGate()
 end
 
 local function init()
+    simulatorMode=detectSimulatorMode()
     buildSwitchSources()
     elrsStage=elrsStageFactory.new({
         wizard=wizard, title=TITLE,
