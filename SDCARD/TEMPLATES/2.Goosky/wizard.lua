@@ -15,12 +15,13 @@ local TARGET_MODULE_INDEX = 0
 local TARGET_RF_TYPE = "TYPE_CROSSFIRE"
 local TARGET_RF_SUBTYPE = "0"
 local SWITCH_SETTLE_TICKS = 20
+local PROGRAMMING_LED_MIN_TICKS = 80
 
 local page = 1
 local pages = {}
 local switchPage
 local completePage
-local switchLedState = nil
+local wizardLedSignature = nil
 
 local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
 local standardColors = { "Orange", "Blue", "Purple" }
@@ -57,7 +58,7 @@ local state = {
         maskLo=0,
         maskHi=0,
     },
-    apply = { status="not-run", error=nil },
+    apply = { status="not-run", error=nil, startedAt=0 },
 }
 
 local switchRows = {
@@ -213,31 +214,113 @@ local function displayError()
     return string.match(message, ":%d+:%s*(.+)$") or message
 end
 
-local function setSwitchPageRingState(mode)
-    if mode == switchLedState then return end
-    if not LED_STRIP_LENGTH or LED_STRIP_LENGTH <= 0
-        or type(setRGBLedColor) ~= "function"
-        or type(applyRGBLedColors) ~= "function" then
-        switchLedState = mode
+local function ledAvailable()
+    return LED_STRIP_LENGTH and LED_STRIP_LENGTH > 0
+        and type(setRGBLedColor) == "function"
+        and type(applyRGBLedColors) == "function"
+end
+
+local function ledCounts()
+    local buttonCount = LED_STRIP_LENGTH >= 26 and 6 or 0
+    return LED_STRIP_LENGTH - buttonCount, buttonCount
+end
+
+local function setLed(index,r,g,b)
+    pcall(setRGBLedColor,index,r,g,b)
+end
+
+local function clearWizardLeds()
+    if not ledAvailable() then
+        wizardLedSignature="off"
+        return
+    end
+    if wizardLedSignature=="off" then return end
+    for index=0,LED_STRIP_LENGTH-1 do setLed(index,0,0,0) end
+    pcall(applyRGBLedColors)
+    wizardLedSignature="off"
+end
+
+local function setStaticWizardLeds(mode)
+    if not ledAvailable() then
+        wizardLedSignature="static:"..mode
+        return
+    end
+    local signature="static:"..mode
+    if wizardLedSignature==signature then return end
+
+    local systemCount,buttonCount=ledCounts()
+    local ringR,ringG,ringB=0,0,0
+    local buttonR,buttonG,buttonB=0,0,0
+
+    if mode=="setup" or mode=="review" then
+        ringR,ringG,ringB=255,255,255
+    elseif mode=="switch-waiting" then
+        ringR=255
+    elseif mode=="switch-ready" then
+        ringG=255
+    elseif mode=="success" then
+        ringG=255
+        buttonG=255
+    elseif mode=="error" then
+        ringR=255
+        buttonR=255
+    end
+
+    for index=0,systemCount-1 do setLed(index,ringR,ringG,ringB) end
+    for segment=0,buttonCount-1 do
+        setLed(systemCount+segment,buttonR,buttonG,buttonB)
+    end
+    pcall(applyRGBLedColors)
+    wizardLedSignature=signature
+end
+
+local function updateProgrammingLeds()
+    if not ledAvailable() then
+        wizardLedSignature="programming"
         return
     end
 
-    -- EdgeTX 2.12 exposes the decorative/gimbal LEDs first and, where present,
-    -- the six SW1-SW6 LEDs last. This page owns only the gimbal/decorative LEDs;
-    -- leave SW1-SW6 untouched for the model/widget to use later.
-    local ringCount = LED_STRIP_LENGTH >= 26 and (LED_STRIP_LENGTH - 6) or LED_STRIP_LENGTH
-    local r,g,b = 0,0,0
-    if mode == "waiting" then
-        r = 255
-    elseif mode == "ready" then
-        g = 255
+    -- Reuse the same red gimbal comet and SW1-SW6 Knight Rider timing used by
+    -- the FlightDeck splash so the wizard and dashboard share one visual
+    -- language instead of inventing a second animation.
+    local systemCount,buttonCount=ledCounts()
+    local now=getTime()
+    local ringPhase=math.floor(now/8)
+    local switchPhase=math.floor(now/10)
+    local signature="programming:"..tostring(ringPhase)..":"..tostring(switchPhase)
+    if wizardLedSignature==signature then return end
+
+    for index=0,LED_STRIP_LENGTH-1 do setLed(index,0,0,0) end
+
+    local ringCount=systemCount>=20 and 2 or 1
+    local ringStart=0
+    local cometRed={255,110,35}
+    for ring=1,ringCount do
+        local ringSize=ring==ringCount
+            and (systemCount-ringStart)
+            or math.floor(systemCount/ringCount)
+        if ringSize>0 then
+            local head=ringPhase%ringSize
+            for tail=0,#cometRed-1 do
+                local offset=(head-tail)%ringSize
+                setLed(ringStart+offset,cometRed[tail+1],0,0)
+            end
+        end
+        ringStart=ringStart+ringSize
     end
 
-    for id=0,ringCount-1 do
-        setRGBLedColor(id,r,g,b)
+    if buttonCount==6 then
+        local sweep={0,1,2,3,4,5,4,3,2,1}
+        local head=sweep[(switchPhase%#sweep)+1]
+        for segment=0,5 do
+            local distance=math.abs(segment-head)
+            local red=distance==0 and 255 or (distance==1 and 55 or 0)
+            setLed(systemCount+segment,red,0,0)
+        end
     end
-    applyRGBLedColors()
-    switchLedState = mode
+
+    pcall(applyRGBLedColors)
+    wizardLedSignature=signature
 end
 
 local function receiverIdRequired()
@@ -400,7 +483,6 @@ end
 local function selectPage(step)
     local target=page+step
     if target<1 or target>#pages then return end
-    if page==2 and switchLedState~=nil then setSwitchPageRingState("off") end
     state.capture.active=nil
     resetCaptureCandidate()
     page=target
@@ -409,6 +491,7 @@ end
 
 local function modelPage()
     lvgl.clear()
+    setStaticWizardLeds("setup")
     local colors=currentColors()
     lvgl.build(wizard.page({
         title=TITLE, subtitle="Model Setup", hasPrevious=false, hasNext=true,
@@ -463,6 +546,8 @@ end
 
 switchPage=function()
     lvgl.clear()
+    local ready=allSwitchesAssigned() and state.capture.active==nil
+    setStaticWizardLeds(ready and "switch-ready" or "switch-waiting")
     local children={}
     for i=1,#switchRows do children[#children+1]=switchCaptureRow(switchRows[i]) end
     children[#children+1]=label("Tap a box, then move only the switch you want to assign.")
@@ -534,6 +619,7 @@ end
 
 local function reviewPage()
     lvgl.clear()
+    setStaticWizardLeds("review")
     if receiverIdRequired() then allocateReceiverId() end
     local colors=currentColors()
     local children2=previewChildren()
@@ -608,20 +694,50 @@ local function runApplyBackend()
     return true
 end
 
-completePage=function()
+local function programmingPage()
     lvgl.clear()
-    if not profileReady() then
-        state.apply.status="failed"
-        state.apply.error="Selected model profile is not yet verified"
-    elseif not receiverIdReady() then
-        state.apply.status="failed"
-        state.apply.error="No valid Receiver ID is available"
-    else
-        runApplyBackend()
+    local colors=currentColors()
+    local children2=previewChildren()
+    children2[#children2+1]=sideLabel("PROGRAMMING MODEL...")
+    children2[#children2+1]=sideLabel("Please wait. Do not exit the wizard.")
+    lvgl.build(wizard.page({
+        title=TITLE, subtitle="Programming",
+        hasPrevious=false, hasNext=false,
+        children1={
+            wizard.summaryLine("Model",nil,models[state.model]),
+            wizard.summaryLine("Color",nil,colors[state.color]),
+            wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
+            wizard.summaryLine("Timer",nil,timers[state.timer]),
+        },
+        children2=children2,
+    }))
+end
+
+completePage=function()
+    if state.apply.status=="not-run" then
+        if not profileReady() then
+            state.apply.status="failed"
+            state.apply.error="Selected model profile is not yet verified"
+        elseif not receiverIdReady() then
+            state.apply.status="failed"
+            state.apply.error="No valid Receiver ID is available"
+        else
+            state.apply.status="pending"
+            state.apply.startedAt=getTime()
+            programmingPage()
+            updateProgrammingLeds()
+            return
+        end
+    elseif state.apply.status=="pending" or state.apply.status=="running" then
+        programmingPage()
+        updateProgrammingLeds()
+        return
     end
 
+    lvgl.clear()
     local colors=currentColors()
     local ok=state.apply.status=="success"
+    setStaticWizardLeds(ok and "success" or "error")
     local children1
     local children2=previewChildren()
     children2[#children2+1]=sideLabel(ok and "MODEL PROGRAMMED" or "PROGRAMMING FAILED")
@@ -654,7 +770,12 @@ completePage=function()
     lvgl.build(wizard.page({
         title=TITLE, subtitle=ok and "Complete" or "Error",
         hasPrevious=not ok, hasNext=false,
-        previousLabel="<  BACK", previousFunc=function() selectPage(-1) end,
+        previousLabel="<  BACK", previousFunc=function()
+            state.apply.status="not-run"
+            state.apply.error=nil
+            state.apply.startedAt=0
+            selectPage(-1)
+        end,
         children1=children1,
         children2=children2,
     }))
@@ -664,29 +785,55 @@ local function init()
     buildSwitchSources()
     pages={modelPage,switchPage,reviewPage,completePage}
     page=1
-    switchLedState=nil
+    wizardLedSignature=nil
+    state.apply.status="not-run"
+    state.apply.error=nil
+    state.apply.startedAt=0
     pages[1]()
 end
 
 local function run(event,touchState)
-    if page==2 then
+    if page==1 then
+        setStaticWizardLeds("setup")
+    elseif page==2 then
         if state.capture.active~=nil then captureMovedSwitch() end
         local ready=allSwitchesAssigned() and state.capture.active==nil
-        setSwitchPageRingState(ready and "ready" or "waiting")
-    elseif switchLedState~=nil then
-        -- Do not leave wizard-owned LED state active after the switch page.
-        setSwitchPageRingState("off")
+        setStaticWizardLeds(ready and "switch-ready" or "switch-waiting")
+    elseif page==3 then
+        setStaticWizardLeds("review")
+    elseif page==4 then
+        if state.apply.status=="pending" then
+            updateProgrammingLeds()
+            if getTime()-state.apply.startedAt>=PROGRAMMING_LED_MIN_TICKS then
+                runApplyBackend()
+                completePage()
+            end
+        elseif state.apply.status=="running" then
+            updateProgrammingLeds()
+        elseif state.apply.status=="success" then
+            setStaticWizardLeds("success")
+        elseif state.apply.status=="failed" then
+            setStaticWizardLeds("error")
+        end
     end
 
     if event==EVT_VIRTUAL_PREV_PAGE and page>1 then
-        killEvents(event); selectPage(-1)
+        if page~=4 or state.apply.status=="failed" then
+            killEvents(event)
+            if page==4 then
+                state.apply.status="not-run"
+                state.apply.error=nil
+                state.apply.startedAt=0
+            end
+            selectPage(-1)
+        end
     elseif event==EVT_VIRTUAL_NEXT_PAGE and page<#pages then
         if page~=2 or (allSwitchesAssigned() and state.capture.active==nil) then
             killEvents(event); selectPage(1)
         end
     end
     if wizard.exitWizard() then
-        if switchLedState~=nil then setSwitchPageRingState("off") end
+        clearWizardLeds()
         return 2
     end
     return 0
