@@ -37,6 +37,7 @@ local state = {
         candidatePosition=nil,
         candidateInitial=nil,
         candidateSince=0,
+        needsRebuild=false,
     },
     receiver = {
         id=nil,
@@ -288,7 +289,7 @@ end
 local function usedIdText()
     local out=""
     local shown=0
-    for id=0,MAX_RECEIVER_ID do
+    for id=1,MAX_RECEIVER_ID do
         if idUsed(id) then
             if shown>0 then out=out.."," end
             out=out..id
@@ -330,14 +331,17 @@ local function allocateReceiverId()
             r.scannedModels=r.scannedModels+1
             if rfType==TARGET_RF_TYPE and tostring(rfSubType or TARGET_RF_SUBTYPE)==TARGET_RF_SUBTYPE then
                 r.matchingModels=r.matchingModels+1
-                if id~=nil then markId(id) end
+                if id~=nil and id>0 then markId(id) end
             end
         end
         filename=nextFile()
     end
 
-    for id=0,MAX_RECEIVER_ID do if idUsed(id) then r.usedIds=r.usedIds+1 end end
-    for id=0,MAX_RECEIVER_ID do
+    for id=1,MAX_RECEIVER_ID do if idUsed(id) then r.usedIds=r.usedIds+1 end end
+
+    -- Receiver ID 0 behaves as the EdgeTX/CRSF default and is intentionally
+    -- reserved. Allocate only 1..63 so AUTO always chooses an explicit ID.
+    for id=1,MAX_RECEIVER_ID do
         if not idUsed(id) then r.id=id; r.status="ok"; break end
     end
     if r.id==nil then r.status="full" end
@@ -363,6 +367,7 @@ local function selectPage(step)
     local target=page+step
     if target<1 or target>#pages then return end
     state.capture.active=nil
+    state.capture.needsRebuild=false
     resetCaptureCandidate()
     page=target
     pages[page]()
@@ -409,7 +414,7 @@ local function switchCaptureRow(row)
                           press=function()
                               state.capture.active=row.key
                               snapshotSwitches()
-                              switchPage()
+                              state.capture.needsRebuild=true
                           end }} },
         },
     }
@@ -436,7 +441,7 @@ local function finishCapture(name,position)
     state.switches[key]={name=name,position=position}
     state.capture.active=nil
     resetCaptureCandidate()
-    switchPage()
+    state.capture.needsRebuild=true
 end
 
 local function captureMovedSwitch()
@@ -489,6 +494,7 @@ local function reviewPage()
     local children2=previewChildren()
     children2[#children2+1]=label("Scan "..r.scannedModels.." / CRSF "..r.matchingModels.." / IDs "..r.usedIds)
     children2[#children2+1]=label("Used: "..usedIdText())
+    children2[#children2+1]=label("ID 0 reserved")
     children2[#children2+1]=label("Lua KB: "..r.memBefore.." -> "..r.memAfter)
     lvgl.build(wizard.page({
         title=TITLE, subtitle="Review / Confirm", hasPrevious=true, hasNext=receiverIdReady(),
@@ -537,7 +543,16 @@ local function init()
 end
 
 local function run(event,touchState)
-    if page==2 and state.capture.active~=nil then captureMovedSwitch() end
+    if page==2 and state.capture.needsRebuild then
+        state.capture.needsRebuild=false
+        switchPage()
+        return 0
+    end
+
+    if page==2 and state.capture.active~=nil then
+        captureMovedSwitch()
+    end
+
     if event==EVT_VIRTUAL_PREV_PAGE and page>1 then
         killEvents(event); selectPage(-1)
     elseif event==EVT_VIRTUAL_NEXT_PAGE and page<#pages then
