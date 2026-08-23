@@ -37,6 +37,7 @@ modelLSDisabled: GLOBAL
 modelSFDisabled: GLOBAL
 modelCustomScriptsDisabled: GLOBAL
 modelTelemetryDisabled: GLOBAL
+functionSwitchConfig: 0
 screenData:
    0:
       LayoutId: "Layout1x1AM"
