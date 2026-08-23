@@ -306,9 +306,6 @@ function M.new(options)
 
     local function refresh_targets(now)
         local ids = {}
-        -- If any required profile field is missing, re-walk the full ELRS
-        -- parameter tree. Re-reading only already-known IDs can never recover
-        -- a field that was dropped during the first pass.
         if not target_complete() and state.fields_count > 0 then
             for id = 1, state.fields_count do ids[#ids + 1] = id end
         else
@@ -330,6 +327,19 @@ function M.new(options)
         state.transport_error = nil
         local ids = {}
         for id = 1, state.fields_count do ids[#ids + 1] = id end
+        queue_fields(ids, false)
+        return true
+    end
+
+    local function queue_named_refresh(names)
+        local ids = {}
+        for _, name in ipairs(names or {}) do
+            local id = state.field_ids[name]
+            if not id then return false end
+            state.settings[name] = nil
+            ids[#ids + 1] = id
+        end
+        if #ids == 0 then return false end
         queue_fields(ids, false)
         return true
     end
@@ -538,6 +548,12 @@ function M.new(options)
             fix.next_action = now + 25
             if not fix.index then set_fix("complete", "ALL SETTINGS VERIFIED") end
             return
+        elseif fix.stage == "wait_invalidated" then
+            fix.stage = "set"
+            fix.index = next_fix_index(fix.index + 1)
+            fix.next_action = now + 25
+            if not fix.index then set_fix("complete", "ALL SETTINGS VERIFIED") end
+            return
         end
 
         local req = profile and profile.ordered[fix.index]
@@ -551,7 +567,7 @@ function M.new(options)
                 fix.rescan_retries = (fix.rescan_retries or 0) + 1
                 fix.stage = "wait_rescan"
                 fix.next_action = now + RESCAN_DELAY
-                fix.message = "REFRESHING ELRS SETTINGS"
+                fix.message = "RECOVERING ELRS SETTINGS"
             else
                 set_fix("error", "REQUIRED ELRS SETTING NOT FOUND: " .. parameter_label(req.parameter))
             end
@@ -594,7 +610,7 @@ function M.new(options)
                     fix.rescan_retries = (fix.rescan_retries or 0) + 1
                     fix.stage = "wait_rescan"
                     fix.next_action = now + RESCAN_DELAY
-                    fix.message = "REFRESHING ELRS SETTINGS"
+                    fix.message = "RECOVERING ELRS SETTINGS"
                 else
                     set_fix("error", "ELRS PARAMETER ID NOT AVAILABLE")
                 end
@@ -623,24 +639,31 @@ function M.new(options)
             fix.readback_retries = 0
             fix.rescan_retries = 0
 
-            -- Most ELRS settings do not rebuild the parameter tree. Continue
-            -- directly using the IDs/options captured by the initial scan so
-            -- a seven-setting repair does not perform seven expensive rescans.
-            -- Profiles can explicitly mark a setting as invalidating other
-            -- fields; packet-rate is the current Goosky example.
-            if req.invalidates and #req.invalidates > 0 and queue_full_rescan() then
-                fix.stage = "wait_rescan"
-                fix.next_action = now + RESCAN_DELAY
-                fix.message = "REFRESHING ELRS SETTINGS"
-            else
-                local next_index = next_fix_index(fix.index + 1)
-                if next_index then
-                    fix.index = next_index
-                    fix.stage = "set"
-                    fix.next_action = now + 25
-                else
-                    set_fix("complete", "ALL SETTINGS VERIFIED")
+            -- Packet-rate family changes can alter Switch Mode. Preserve every
+            -- other cached setting and re-read only the fields the RF profile
+            -- explicitly marks as invalidated. This matches the proven
+            -- FlightDeck behavior and avoids losing Telem Ratio/Model Match/etc.
+            if req.invalidates and #req.invalidates > 0 then
+                if queue_named_refresh(req.invalidates) then
+                    fix.stage = "wait_invalidated"
+                    fix.next_action = now + 100
+                    fix.message = "VERIFYING RELATED SETTINGS"
+                    return
+                elseif queue_full_rescan() then
+                    fix.stage = "wait_rescan"
+                    fix.next_action = now + RESCAN_DELAY
+                    fix.message = "RECOVERING ELRS SETTINGS"
+                    return
                 end
+            end
+
+            local next_index = next_fix_index(fix.index + 1)
+            if next_index then
+                fix.index = next_index
+                fix.stage = "set"
+                fix.next_action = now + 25
+            else
+                set_fix("complete", "ALL SETTINGS VERIFIED")
             end
         end
     end
