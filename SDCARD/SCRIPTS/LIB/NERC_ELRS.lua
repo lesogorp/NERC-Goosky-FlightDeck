@@ -322,8 +322,10 @@ function M.new(options)
 
     local function queue_full_rescan()
         if state.fields_count <= 0 then return false end
-        state.settings = {}
-        state.field_ids = {}
+        -- Recovery scans merge fresh parameter replies into the last complete
+        -- snapshot instead of deleting that snapshot up front. ELRS can miss a
+        -- field on a single tree walk; clearing the cache made a transient miss
+        -- look like a real "SETTING NOT FOUND" and stopped the repair sequence.
         state.transport_error = nil
         local ids = {}
         for id = 1, state.fields_count do ids[#ids + 1] = id end
@@ -639,10 +641,6 @@ function M.new(options)
             fix.readback_retries = 0
             fix.rescan_retries = 0
 
-            -- Packet-rate family changes can alter Switch Mode. Preserve every
-            -- other cached setting and re-read only the fields the RF profile
-            -- explicitly marks as invalidated. This matches the proven
-            -- FlightDeck behavior and avoids losing Telem Ratio/Model Match/etc.
             if req.invalidates and #req.invalidates > 0 then
                 if queue_named_refresh(req.invalidates) then
                     fix.stage = "wait_invalidated"
