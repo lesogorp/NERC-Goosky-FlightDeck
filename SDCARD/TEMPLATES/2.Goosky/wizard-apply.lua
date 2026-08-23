@@ -134,6 +134,25 @@ local function imageName(modelName, color)
     return prefix .. code .. ".png"
 end
 
+local function resolveDefaultInput(rawSource, label)
+    if not model or type(model.getInput) ~= "function" then
+        error("This EdgeTX build cannot inspect default inputs")
+    end
+
+    -- EdgeTX defaultInputs() creates one Input per main control in the radio's
+    -- configured channel order. Match by the underlying physical source rather
+    -- than assuming I1-I4 are always AETR, so custom channel-order preferences
+    -- do not change helicopter control mapping.
+    for input = 0, 3 do
+        local info = model.getInput(input, 0)
+        if type(info) == "table" and tonumber(info.source) == tonumber(rawSource) then
+            return fieldId("input" .. tostring(input + 1))
+        end
+    end
+
+    error("Cannot resolve EdgeTX Input for " .. label)
+end
+
 local function apply(payload)
     if type(payload) ~= "table" then error("Missing wizard configuration") end
     if payload.modelName ~= "S1 V2" and payload.modelName ~= "S2 MAX" then
@@ -159,19 +178,24 @@ local function apply(payload)
     if not logicalTimer or logicalTimer == 0 then error("Cannot resolve logical switch L01") end
     local logicalFlight = logicalTimer + 1
 
-    -- The native template path can leave the Inputs page empty. Restore the
-    -- standard Ail/Ele/Thr/Rud input definitions for normal EdgeTX visibility
-    -- and future rate/expo editing, but keep the already hardware-proven mixer
-    -- sources unchanged for now.
     if not model or type(model.defaultInputs) ~= "function" then
         error("This EdgeTX build cannot create default inputs")
     end
     model.defaultInputs()
 
-    local srcAil = fieldId("ail")
-    local srcEle = fieldId("ele")
-    local srcThr = fieldId("thr")
-    local srcRud = fieldId("rud")
+    local rawAil = fieldId("ail")
+    local rawEle = fieldId("ele")
+    local rawThr = fieldId("thr")
+    local rawRud = fieldId("rud")
+
+    -- Route the model through EdgeTX Inputs so future rates/expo changes on the
+    -- Inputs page actually affect the flight-control outputs. Resolve each
+    -- Input by its physical source to remain independent of channel order.
+    local srcAil = resolveDefaultInput(rawAil, "Aileron")
+    local srcEle = resolveDefaultInput(rawEle, "Elevator")
+    local srcThr = resolveDefaultInput(rawThr, "Throttle")
+    local srcRud = resolveDefaultInput(rawRud, "Rudder")
+
     local srcMax = fieldId("max")
     local srcCh3 = fieldId("ch3")
     local srcS1 = sourceIndex("S1")
