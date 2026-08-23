@@ -25,6 +25,9 @@ local profiles = {
                 target = "333Hz Full",
                 policy = "required",
                 matcher = "333_full",
+                -- ELRS can change/reset the effective switch-mode selection
+                -- when packet-rate families change. Re-read it with the rate.
+                invalidates = { "Switch Mode" },
             },
             switchMode = {
                 parameter = "Switch Mode",
