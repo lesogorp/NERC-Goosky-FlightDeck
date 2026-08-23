@@ -5,13 +5,13 @@
   "injectTelemetrySimulation": true,
   "targets": {
     "mk3": {
-      "profile": "NERC MK3",
-      "radio": "",
+      "profile": "0",
+      "radio": "edgetx-tx16smk3",
       "sdFolder": "c800x480"
     },
     "gx15": {
-      "profile": "NERC GX15",
-      "radio": "",
+      "profile": "0",
+      "radio": "edgetx-tx15",
       "sdFolder": "c480x320"
     }
   }
