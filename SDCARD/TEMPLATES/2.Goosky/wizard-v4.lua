@@ -1,6 +1,6 @@
 -- NERC Goosky BNF Wizard v1 diagnostic build
 -- EdgeTX 2.12 color radios
--- Bounded-memory Receiver ID scan + settled switch capture.
+-- Bounded-memory Receiver ID scan + low-latency settled switch capture.
 -- No ELRS check/fix and no model writes yet.
 
 local RUN_DIR = "/TEMPLATES/2.Goosky"
@@ -37,7 +37,6 @@ local state = {
         candidatePosition=nil,
         candidateInitial=nil,
         candidateSince=0,
-        needsRebuild=false,
     },
     receiver = {
         id=nil,
@@ -306,7 +305,6 @@ end
 
 local function allocateReceiverId()
     local r=state.receiver
-    if type(collectgarbage)=="function" then collectgarbage("collect") end
     r.memBefore=type(collectgarbage)=="function" and math.floor(collectgarbage("count")+0.5) or 0
     r.id=nil; r.status="scan-error"; r.scannedModels=0; r.matchingModels=0; r.usedIds=0
     r.maskLo=0; r.maskHi=0
@@ -347,7 +345,6 @@ local function allocateReceiverId()
     if r.id==nil then r.status="full" end
 
     filename=nil; nextFile=nil
-    if type(collectgarbage)=="function" then collectgarbage("collect") end
     r.memAfter=type(collectgarbage)=="function" and math.floor(collectgarbage("count")+0.5) or 0
 end
 
@@ -367,7 +364,6 @@ local function selectPage(step)
     local target=page+step
     if target<1 or target>#pages then return end
     state.capture.active=nil
-    state.capture.needsRebuild=false
     resetCaptureCandidate()
     page=target
     pages[page]()
@@ -399,7 +395,7 @@ local function switchCaptureRow(row)
     local rowH=metrics.large and 58 or 42
     local captureH=metrics.large and 50 or 36
     local captureW=math.floor(LCD_W*(metrics.large and 0.60 or 0.62))
-    local active=state.capture.active==row.key
+    local key=row.key
     return {
         type="rectangle", w=lvgl.PERCENT_SIZE+100, h=rowH, thickness=0,
         flexPad=0, flexFlow=lvgl.FLOW_ROW, align=LEFT|VCENTER,
@@ -409,12 +405,13 @@ local function switchCaptureRow(row)
                           color=wizard.textColor(), text=row.label }} },
             { type="rectangle", w=lvgl.PERCENT_SIZE+66, h=rowH, thickness=0, align=LEFT|VCENTER,
               children={{ type="button", x=0, y=math.floor((rowH-captureH)/2), w=captureW, h=captureH,
-                          text=assignmentDisplay(row.key), color=active and ORANGE or DARKGREY,
-                          textColor=active and BLACK or WHITE, cornerRadius=metrics.large and 12 or 8,
+                          text=function() return assignmentDisplay(key) end,
+                          color=function() return state.capture.active==key and ORANGE or DARKGREY end,
+                          textColor=function() return state.capture.active==key and BLACK or WHITE end,
+                          cornerRadius=metrics.large and 12 or 8,
                           press=function()
-                              state.capture.active=row.key
+                              state.capture.active=key
                               snapshotSwitches()
-                              state.capture.needsRebuild=true
                           end }} },
         },
     }
@@ -427,10 +424,16 @@ switchPage=function()
     children[#children+1]=label("Tap a box, then move only the switch you want to assign.")
     lvgl.build(wizard.fullPage({
         title=TITLE, subtitle="Switch Assignment", hasPrevious=true,
-        hasNext=allSwitchesAssigned() and state.capture.active==nil,
-        previousLabel="<  BACK", nextLabel="NEXT  >",
+        hasNext=true,
+        previousLabel="<  BACK",
+        nextLabel=function()
+            if allSwitchesAssigned() and state.capture.active==nil then return "NEXT  >" end
+            return "ASSIGN ALL"
+        end,
         previousFunc=function() selectPage(-1) end,
-        nextFunc=function() selectPage(1) end,
+        nextFunc=function()
+            if allSwitchesAssigned() and state.capture.active==nil then selectPage(1) end
+        end,
         children=children,
     }))
 end
@@ -441,7 +444,6 @@ local function finishCapture(name,position)
     state.switches[key]={name=name,position=position}
     state.capture.active=nil
     resetCaptureCandidate()
-    state.capture.needsRebuild=true
 end
 
 local function captureMovedSwitch()
@@ -488,7 +490,6 @@ end
 local function reviewPage()
     lvgl.clear()
     allocateReceiverId()
-    if type(collectgarbage)=="function" then collectgarbage("collect") end
     local colors=currentColors()
     local r=state.receiver
     local children2=previewChildren()
@@ -543,12 +544,6 @@ local function init()
 end
 
 local function run(event,touchState)
-    if page==2 and state.capture.needsRebuild then
-        state.capture.needsRebuild=false
-        switchPage()
-        return 0
-    end
-
     if page==2 and state.capture.active~=nil then
         captureMovedSwitch()
     end
