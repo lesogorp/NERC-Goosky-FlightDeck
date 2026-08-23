@@ -26,25 +26,62 @@
       "problemMatcher": []
     },
     {
-      "label": "EdgeTX: Copy widget to simulator SD",
-      "type": "shell",
-      "command": "powershell",
+      "label": "EdgeTX: Sync simulator SD",
+      "type": "process",
+      "command": "powershell.exe",
       "args": [
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "$sdSource = '${workspaceFolder}\\SDCARD'; $sdDestination = '${input:simSdPath}'; Copy-Item -Path \"$sdSource\\*\" -Destination $sdDestination -Recurse -Force; Copy-Item -Path '${workspaceFolder}\\dev\\simulator.lua' -Destination \"$sdDestination\\WIDGETS\\NERC_GSkyFD\\simulator.lua\" -Force; Write-Host \"Updated $sdDestination with widget, model wizard, images, and simulated telemetry\""
+        "-File",
+        "${workspaceFolder}\\dev\\Run-EdgeTXSimulator.ps1",
+        "-Workspace",
+        "${workspaceFolder}",
+        "-SyncOnly"
       ],
       "problemMatcher": []
-    }
-  ],
-  "inputs": [
+    },
     {
-      "id": "simSdPath",
-      "type": "promptString",
-      "description": "Full path to the EdgeTX simulator SD-card directory",
-      "default": "C:\\EdgeTX\\simulator-sd"
+      "label": "EdgeTX: Simulate TX16S MK3",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\dev\\Run-EdgeTXSimulator.ps1",
+        "-Workspace",
+        "${workspaceFolder}",
+        "-Target",
+        "mk3"
+      ],
+      "dependsOrder": "sequence",
+      "dependsOn": ["EdgeTX: Run widget tests"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "EdgeTX: Simulate GX15",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\dev\\Run-EdgeTXSimulator.ps1",
+        "-Workspace",
+        "${workspaceFolder}",
+        "-Target",
+        "gx15"
+      ],
+      "dependsOrder": "sequence",
+      "dependsOn": ["EdgeTX: Run widget tests"],
+      "problemMatcher": []
     }
   ]
 }
