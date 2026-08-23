@@ -25,6 +25,15 @@ local function sourceIndex(name)
     return fieldId(string.lower(name))
 end
 
+local function inputSource(index)
+    local name = "I" .. tostring(index)
+    local source = type(getSourceIndex) == "function" and getSourceIndex(name) or 0
+    if source and source ~= 0 then return source end
+    local info = getFieldInfo and (getFieldInfo(name) or getFieldInfo(string.lower(name)))
+    if info and info.id ~= nil then return info.id end
+    error("Cannot resolve EdgeTX input " .. name)
+end
+
 local function switchPosition(name, position)
     if type(getSwitchIndex) ~= "function" then error("getSwitchIndex unavailable") end
     local suffix = position == "up" and "\194\130"
@@ -158,10 +167,15 @@ local function apply(payload)
     if not logicalTimer or logicalTimer == 0 then error("Cannot resolve logical switch L01") end
     local logicalFlight = logicalTimer + 1
 
-    local srcAil = fieldId("ail")
-    local srcEle = fieldId("ele")
-    local srcThr = fieldId("thr")
-    local srcRud = fieldId("rud")
+    if not model or type(model.defaultInputs) ~= "function" then
+        error("This EdgeTX build cannot create default inputs")
+    end
+    model.defaultInputs()
+
+    local srcAil = inputSource(1)
+    local srcEle = inputSource(2)
+    local srcThr = inputSource(3)
+    local srcRud = inputSource(4)
     local srcMax = fieldId("max")
     local srcCh3 = fieldId("ch3")
     local srcS1 = sourceIndex("S1")
@@ -239,8 +253,6 @@ local function apply(payload)
     voice(12, poseSwitch, "sxrstb")
     voice(13, resetSwitch, "timrs1")
 
-    -- Internal CRSF/ExpressLRS only. Receiver ID is assigned by the wizard.
-    -- No ELRS operating-parameter validation or repair is performed here.
     model.setModule(0, {
         Type = 5,
         modelId = payload.receiverId,
