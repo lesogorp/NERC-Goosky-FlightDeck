@@ -30,6 +30,7 @@ function M.new(options)
     local title = options.title or "NERC Model Wizard"
     local getModelName = options.getModelName
     local ensureModule = options.ensureModule
+    local linkConnected = options.linkConnected
     local goBack = options.goBack
     local goNext = options.goNext
 
@@ -45,6 +46,12 @@ function M.new(options)
     local xPad=metrics.large and 12 or 7
     local font=metrics.fieldFont
 
+    local function liveLink()
+        if type(linkConnected) ~= "function" then return false end
+        local ok,value=pcall(linkConnected)
+        return ok and (value==true or (type(value)=="number" and value~=0))
+    end
+
     local function stateSignature()
         if not session then return "no-session:" .. tostring(errorText or "") end
         local s=session.getState()
@@ -52,6 +59,7 @@ function M.new(options)
         local fix=s.fix or {}
         return table.concat({
             tostring(s.device_found), tostring(s.scan_complete), tostring(s.transport_error),
+            tostring(s.connected), tostring(s.armed), tostring(liveLink()),
             tostring(fix.stage), tostring(fix.message), tostring(c.packetRate),
             tostring(c.switchMode), tostring(c.telemetry), tostring(c.modelMatch),
             tostring(c.maxPower), tostring(c.dynamicPower), tostring(c.antennaMode)
@@ -61,6 +69,11 @@ function M.new(options)
     local function startSession()
         errorText=nil
         lastSignature=nil
+        if liveLink() then
+            errorText="POWER OFF HELICOPTER - TELEMETRY ACTIVE"
+            session=nil
+            return false
+        end
         local modelName=type(getModelName)=="function" and getModelName() or ""
         profile,errorText=profiles.requireForAircraft("Goosky",modelName)
         if not profile then session=nil; return false end
@@ -168,10 +181,13 @@ function M.new(options)
     end
 
     local function statusText()
+        if liveLink() then return "POWER OFF HELICOPTER - TELEMETRY ACTIVE" end
         if errorText then return errorText end
         if not session then return "ELRS SESSION NOT AVAILABLE" end
         local s=session.getState()
         local fix=s.fix or {}
+        if s.armed then return "ELRS REPORTS ARMED - POWER OFF HELICOPTER" end
+        if s.connected then return "RECEIVER CONNECTED - POWER OFF HELICOPTER" end
         if s.transport_error then return s.transport_error end
         if fix.stage=="error" then return fix.message or "ELRS CHANGE FAILED" end
         if fix.stage=="complete" then return "ELRS SETTINGS VERIFIED" end
@@ -186,9 +202,11 @@ function M.new(options)
     end
 
     local function nextLabel()
+        if liveLink() then return "POWER OFF" end
         if errorText or not session then return "RETRY" end
         local s=session.getState()
         local fix=s.fix or {}
+        if s.connected or s.armed then return "POWER OFF" end
         if s.transport_error or fix.stage=="error" then return "RETRY" end
         if fix.stage~="idle" and fix.stage~="complete" then return "APPLYING" end
         if not s.scan_complete then return "WAIT" end
@@ -197,14 +215,25 @@ function M.new(options)
     end
 
     local function nextAction()
+        if liveLink() then
+            errorText="POWER OFF HELICOPTER - TELEMETRY ACTIVE"
+            M._render()
+            return
+        end
         if errorText or not session then startSession(); M._render(); return end
         local s=session.getState()
         local fix=s.fix or {}
+        if s.connected or s.armed then
+            errorText=s.armed and "ELRS REPORTS ARMED - POWER OFF HELICOPTER"
+                or "RECEIVER CONNECTED - POWER OFF HELICOPTER"
+            M._render()
+            return
+        end
         if s.transport_error or fix.stage=="error" then startSession(); M._render(); return end
         if fix.stage~="idle" and fix.stage~="complete" then return end
         if not s.scan_complete then return end
         if session.fixRequired() then
-            local ok,err=session.beginFix({ holdOn=true })
+            local ok,err=session.beginFix({ holdOn=true, linkConnected=linkConnected })
             if not ok then errorText=err end
             M._render()
             return
@@ -240,19 +269,24 @@ function M.new(options)
 
     function M.enter() startSession(); M._render() end
     function M.update()
-        if session then session.update(true) end
+        local safe=not liveLink()
+        if session then session.update(safe) end
+        if not safe then errorText="POWER OFF HELICOPTER - TELEMETRY ACTIVE" end
         local signature=stateSignature()
         if signature~=lastSignature then M._render() end
     end
     function M.isReady()
-        return session and session.scanComplete()
-            and not session.getState().transport_error
-            and not session.fixRequired()
+        if liveLink() then return false end
+        local s=session and session.getState() or nil
+        return session and s and not s.connected and not s.armed
+            and session.scanComplete() and not s.transport_error and not session.fixRequired()
     end
     function M.getLedState()
+        if liveLink() then return "mismatch" end
         if errorText or not session then return "checking" end
         local s=session.getState()
         local fix=s.fix or {}
+        if s.connected or s.armed then return "mismatch" end
         if not s.scan_complete then return "checking" end
         if s.transport_error or fix.stage=="error" or session.fixRequired() then return "mismatch" end
         return "ready"
