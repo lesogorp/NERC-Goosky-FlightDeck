@@ -194,8 +194,6 @@ local function cleanScalar(v)
     return v
 end
 
--- Scan exactly header.modelId[0].val and moduleData[0].{type,subType}.
--- Memory is bounded to one 256-byte chunk plus one partial YAML line.
 local function scanRfIdentity(path)
     if not io or type(io.open)~="function" or type(io.read)~="function" then return false end
     local f=io.open(path,"r")
@@ -214,8 +212,6 @@ local function scanRfIdentity(path)
         if body=="" then return end
         local indent=#spaces
 
-        -- A top-level/parent line can terminate the old section and start the next
-        -- section on the same pass.
         if section and indent<=sectionIndent then
             section=nil; slotActive=false; slotIndent=-1
         elseif section and slotActive and indent<=slotIndent then
@@ -470,8 +466,6 @@ local function captureMovedSwitch()
     if current==nil then return end
     local pos=positionFromValue(current)
     if pos~=c.candidatePosition then
-        -- HOLD/RESET momentaries may return to the starting position before the
-        -- normal 200 ms settle period. Preserve the actuated edge in that case.
         if (key=="hold" or key=="reset") and pos==c.candidateInitial then
             finishCapture(c.candidateName,c.candidatePosition)
             return
@@ -492,6 +486,10 @@ local function reviewPage()
     if type(collectgarbage)=="function" then collectgarbage("collect") end
     local colors=currentColors()
     local r=state.receiver
+    local children2=previewChildren()
+    children2[#children2+1]=label("Scan "..r.scannedModels.." / CRSF "..r.matchingModels.." / IDs "..r.usedIds)
+    children2[#children2+1]=label("Used: "..usedIdText())
+    children2[#children2+1]=label("Lua KB: "..r.memBefore.." -> "..r.memAfter)
     lvgl.build(wizard.page({
         title=TITLE, subtitle="Review / Confirm", hasPrevious=true, hasNext=receiverIdReady(),
         previousLabel="<  BACK", nextLabel="CONFIRM",
@@ -507,12 +505,7 @@ local function reviewPage()
             wizard.summaryLine("HOLD",nil,assignmentDisplay("hold")),
             wizard.summaryLine("RESET",nil,assignmentDisplay("reset")),
         },
-        children2={
-            unpack(previewChildren()),
-            label("Scan "..r.scannedModels.." / CRSF "..r.matchingModels.." / IDs "..r.usedIds),
-            label("Used: "..usedIdText()),
-            label("Lua KB: "..r.memBefore.." -> "..r.memAfter),
-        },
+        children2=children2,
     }))
 end
 
