@@ -572,52 +572,13 @@ function M.new(options)
 
         local req = repair_order[fix.index]
         if not req then set_fix("complete", "ALL SETTINGS VERIFIED"); return end
-        local name, setting = setting_for(req)
-        if not setting then
-            if req.policy == "if-supported" then
-                local next_index = next_fix_index(fix.index + 1)
-                if next_index then fix.index = next_index else set_fix("complete", "ALL SETTINGS VERIFIED") end
-            elseif (fix.rescan_retries or 0) < RESCAN_RETRY_LIMIT and queue_full_rescan() then
-                fix.rescan_retries = (fix.rescan_retries or 0) + 1
-                fix.stage = "wait_rescan"
-                fix.next_action = now + RESCAN_DELAY
-                fix.message = "RECOVERING ELRS SETTINGS"
-            else
-                set_fix("error", "REQUIRED ELRS SETTING NOT FOUND: " .. parameter_label(req.parameter))
-            end
-            return
-        end
 
-        if fix.stage == "set" then
-            if requirement_matches(req, setting.value) then
-                local next_index = next_fix_index(fix.index + 1)
-                if next_index then
-                    fix.index = next_index
-                    fix.readback_retries = 0
-                else
-                    set_fix("complete", "ALL SETTINGS VERIFIED")
-                end
-                return
-            end
-            local target = find_target(name, req)
-            if target == nil then
-                set_fix("error", tostring(req.display or req.target) .. " IS NOT AVAILABLE")
-            elseif not write_choice(name, target) then
-                fix.write_retries = (fix.write_retries or 0) + 1
-                fix.next_action = now + 10
-                fix.message = "SETTING " .. tostring(req.display or req.target) .. " - CRSF BUSY"
-            else
-                fix.write_retries = 0
-                fix.readback_retries = 0
-                state.settings[name] = nil
-                fix.parameter = name
-                fix.stage = "queue_readback"
-                fix.next_action = now + (req.key == "modelMatch" and 200 or 100)
-                fix.message = "SETTING " .. tostring(req.display or req.target)
-            end
-            return
-        end
-
+        -- After a successful write we intentionally clear only that setting so
+        -- its value must come from a fresh CRSF readback. The previous state
+        -- machine checked for a missing setting before handling queue_readback,
+        -- mistook that intentional nil for a lost field, and launched a full
+        -- tree rescan after every write. That caused the slow UI and the moving
+        -- REQUIRED SETTING NOT FOUND failures. Readback owns that nil state.
         if fix.stage == "queue_readback" then
             if not queue_readback(fix.parameter) then
                 if (fix.rescan_retries or 0) < RESCAN_RETRY_LIMIT and queue_full_rescan() then
@@ -636,7 +597,26 @@ function M.new(options)
 
         if fix.stage == "wait_readback" then
             local _, readback = setting_for(req)
-            if not readback then return end
+            if not readback then
+                -- The targeted read finished without repopulating this field.
+                -- Retry the same ID first; only fall back to a full tree scan
+                -- after bounded targeted retries.
+                if (fix.readback_retries or 0) < READBACK_RETRY_LIMIT then
+                    fix.readback_retries = (fix.readback_retries or 0) + 1
+                    fix.stage = "queue_readback"
+                    fix.next_action = now + READBACK_RETRY_DELAY
+                    fix.message = "VERIFYING " .. tostring(req.display or req.target)
+                elseif (fix.rescan_retries or 0) < RESCAN_RETRY_LIMIT and queue_full_rescan() then
+                    fix.rescan_retries = (fix.rescan_retries or 0) + 1
+                    fix.stage = "wait_rescan"
+                    fix.next_action = now + RESCAN_DELAY
+                    fix.message = "RECOVERING ELRS SETTINGS"
+                else
+                    set_fix("error", "ELRS READBACK FAILED: " .. parameter_label(req.parameter))
+                end
+                return
+            end
+
             if not requirement_matches(req, readback.value) then
                 if (fix.readback_retries or 0) < READBACK_RETRY_LIMIT then
                     fix.readback_retries = (fix.readback_retries or 0) + 1
@@ -675,6 +655,57 @@ function M.new(options)
             else
                 set_fix("complete", "ALL SETTINGS VERIFIED")
             end
+            return
+        end
+
+        -- Missing-field recovery applies only while selecting the next setting
+        -- to change. It must never intercept an in-progress targeted readback.
+        local name, setting = setting_for(req)
+        if not setting then
+            if req.policy == "if-supported" then
+                local next_index = next_fix_index(fix.index + 1)
+                if next_index then fix.index = next_index else set_fix("complete", "ALL SETTINGS VERIFIED") end
+            elseif (fix.rescan_retries or 0) < RESCAN_RETRY_LIMIT and queue_full_rescan() then
+                fix.rescan_retries = (fix.rescan_retries or 0) + 1
+                fix.stage = "wait_rescan"
+                fix.next_action = now + RESCAN_DELAY
+                fix.message = "RECOVERING ELRS SETTINGS"
+            else
+                local prefix = req.policy == "required" and "REQUIRED ELRS SETTING NOT FOUND: "
+                    or "ELRS SETTING NOT FOUND: "
+                set_fix("error", prefix .. parameter_label(req.parameter))
+            end
+            return
+        end
+
+        if fix.stage == "set" then
+            if requirement_matches(req, setting.value) then
+                local next_index = next_fix_index(fix.index + 1)
+                if next_index then
+                    fix.index = next_index
+                    fix.readback_retries = 0
+                else
+                    set_fix("complete", "ALL SETTINGS VERIFIED")
+                end
+                return
+            end
+            local target = find_target(name, req)
+            if target == nil then
+                set_fix("error", tostring(req.display or req.target) .. " IS NOT AVAILABLE")
+            elseif not write_choice(name, target) then
+                fix.write_retries = (fix.write_retries or 0) + 1
+                fix.next_action = now + 10
+                fix.message = "SETTING " .. tostring(req.display or req.target) .. " - CRSF BUSY"
+            else
+                fix.write_retries = 0
+                fix.readback_retries = 0
+                state.settings[name] = nil
+                fix.parameter = name
+                fix.stage = "queue_readback"
+                fix.next_action = now + (req.key == "modelMatch" and 200 or 100)
+                fix.message = "SETTING " .. tostring(req.display or req.target)
+            end
+            return
         end
     end
 
