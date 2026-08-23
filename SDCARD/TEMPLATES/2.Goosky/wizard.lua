@@ -247,7 +247,7 @@ local function setStaticWizardLeds(mode)
 
     if mode=="setup" or mode=="review" or mode=="elrs-check" then
         ringR,ringG,ringB=255,255,255
-    elseif mode=="switch-waiting" then
+    elseif mode=="switch-waiting" or mode=="elrs-mismatch" then
         ringR=255
     elseif mode=="switch-ready" or mode=="elrs-ready" then
         ringG=255
@@ -722,7 +722,14 @@ local function run(event,touchState)
         setStaticWizardLeds(ready and "switch-ready" or "switch-waiting")
     elseif page==3 then
         if elrsStage then elrsStage.update() end
-        setStaticWizardLeds(elrsStage and elrsStage.isReady() and "elrs-ready" or "elrs-check")
+        local ledState=elrsStage and elrsStage.getLedState and elrsStage.getLedState() or "checking"
+        if ledState=="ready" then
+            setStaticWizardLeds("elrs-ready")
+        elseif ledState=="mismatch" then
+            setStaticWizardLeds("elrs-mismatch")
+        else
+            setStaticWizardLeds("elrs-check")
+        end
     elseif page==4 then
         setStaticWizardLeds("review")
     elseif page==5 then
