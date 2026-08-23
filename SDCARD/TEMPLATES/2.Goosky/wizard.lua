@@ -205,6 +205,14 @@ local function allSwitchesAssigned()
     return s.atti and s.bank and s.hold and s.reset
 end
 
+local function displayError()
+    local message=tostring(state.apply.error or "Unknown error")
+    -- pcall errors often include /path/file.lua:line: before the useful text.
+    -- Strip that prefix for the small radio display while preserving the actual
+    -- failure reason the user needs to report.
+    return string.match(message, ":%d+:%s*(.+)$") or message
+end
+
 local function setSwitchPageRingState(mode)
     if mode == switchLedState then return end
     if not LED_STRIP_LENGTH or LED_STRIP_LENGTH <= 0
@@ -392,6 +400,7 @@ end
 local function selectPage(step)
     local target=page+step
     if target<1 or target>#pages then return end
+    if page==2 and switchLedState~=nil then setSwitchPageRingState("off") end
     state.capture.active=nil
     resetCaptureCandidate()
     page=target
@@ -613,19 +622,11 @@ completePage=function()
 
     local colors=currentColors()
     local ok=state.apply.status=="success"
+    local children1
     local children2=previewChildren()
     children2[#children2+1]=sideLabel(ok and "MODEL PROGRAMMED" or "PROGRAMMING FAILED")
-    if ok then
-        children2[#children2+1]=sideLabel("Verify controls, HOLD, banks and ATT before flight.")
-        children2[#children2+1]=sideLabel("Discover telemetry with the receiver powered and linked.")
-    else
-        children2[#children2+1]=sideLabel(state.apply.error or "Unknown error")
-    end
 
-    lvgl.build(wizard.page({
-        title=TITLE, subtitle=ok and "Complete" or "Error",
-        hasPrevious=not ok, hasNext=false,
-        previousLabel="<  BACK", previousFunc=function() selectPage(-1) end,
+    if ok then
         children1={
             wizard.summaryLine("Model",nil,models[state.model]),
             wizard.summaryLine("Color",nil,colors[state.color]),
@@ -635,7 +636,26 @@ completePage=function()
             wizard.summaryLine("BANK",nil,assignmentDisplay("bank")),
             wizard.summaryLine("HOLD",nil,assignmentDisplay("hold")),
             wizard.summaryLine("RESET",nil,assignmentDisplay("reset")),
-        },
+        }
+        children2[#children2+1]=sideLabel("Verify controls, HOLD, banks and ATT before flight.")
+        children2[#children2+1]=sideLabel("Discover telemetry with the receiver powered and linked.")
+    else
+        -- Put the actual exception at the top of the main pane. The previous
+        -- right-pane-only error could be clipped on 480x320 displays.
+        children1={
+            label("PROGRAMMING FAILED"),
+            label(displayError()),
+            wizard.summaryLine("Model",nil,models[state.model]),
+            wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
+        }
+        children2[#children2+1]=sideLabel("Use BACK to correct the setup and retry.")
+    end
+
+    lvgl.build(wizard.page({
+        title=TITLE, subtitle=ok and "Complete" or "Error",
+        hasPrevious=not ok, hasNext=false,
+        previousLabel="<  BACK", previousFunc=function() selectPage(-1) end,
+        children1=children1,
         children2=children2,
     }))
 end
@@ -651,7 +671,8 @@ end
 local function run(event,touchState)
     if page==2 then
         if state.capture.active~=nil then captureMovedSwitch() end
-        setSwitchPageRingState(allSwitchesAssigned() and "ready" or "waiting")
+        local ready=allSwitchesAssigned() and state.capture.active==nil
+        setSwitchPageRingState(ready and "ready" or "waiting")
     elseif switchLedState~=nil then
         -- Do not leave wizard-owned LED state active after the switch page.
         setSwitchPageRingState("off")
@@ -660,7 +681,9 @@ local function run(event,touchState)
     if event==EVT_VIRTUAL_PREV_PAGE and page>1 then
         killEvents(event); selectPage(-1)
     elseif event==EVT_VIRTUAL_NEXT_PAGE and page<#pages then
-        if page~=2 or allSwitchesAssigned() then killEvents(event); selectPage(1) end
+        if page~=2 or (allSwitchesAssigned() and state.capture.active==nil) then
+            killEvents(event); selectPage(1)
+        end
     end
     if wizard.exitWizard() then
         if switchLedState~=nil then setSwitchPageRingState("off") end
