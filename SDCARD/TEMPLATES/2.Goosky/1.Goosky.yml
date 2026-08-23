@@ -37,3 +37,11 @@ modelLSDisabled: GLOBAL
 modelSFDisabled: GLOBAL
 modelCustomScriptsDisabled: GLOBAL
 modelTelemetryDisabled: GLOBAL
+screenData:
+   0:
+      LayoutId: "Layout1x1AM"
+      layoutData:
+         zones:
+            0:
+               widgetName: "NERC_GSkyFD"
+               widgetData: {}
