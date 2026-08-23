@@ -195,16 +195,7 @@ function M.new(options)
     function M._render()
         lvgl.clear()
         local mismatches=mismatchMap()
-        local children={
-            {
-                type="rectangle", w=lvgl.PERCENT_SIZE+100, h=headH,
-                thickness=0, align=LEFT|VCENTER,
-                children={{ type="label", x=xPad, w=lvgl.PERCENT_SIZE+96,
-                    color=wizard.textColor(), font=font,
-                    text=profile and profile.label or "ELRS RF Profile" }},
-            },
-            tableHeader(),
-        }
+        local children={ tableHeader() }
         for _,def in ipairs(ROWS) do
             local r=settingRow(def,mismatches)
             if r then children[#children+1]=r end
