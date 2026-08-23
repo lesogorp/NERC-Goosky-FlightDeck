@@ -1,5 +1,5 @@
 -- NERC Goosky wizard ELRS stage
--- UI adapter around the shared profile-driven NERC_ELRS engine.
+-- Compact UI adapter around the shared profile-driven NERC_ELRS engine.
 
 local LIB_DIR = "/SCRIPTS/LIB"
 
@@ -14,6 +14,16 @@ profilesLoader=nil; elrsLoader=nil
 
 local M = {}
 
+local ROWS = {
+    { label="Rate", key="packetRate" },
+    { label="Channels", key="switchMode" },
+    { label="Telemetry", key="telemetry" },
+    { label="Model Match", key="modelMatch" },
+    { label="Power", key="maxPower" },
+    { label="Dynamic", key="dynamicPower" },
+    { label="Antenna", key="antennaMode", optional=true },
+}
+
 function M.new(options)
     options = options or {}
     local wizard = options.wizard
@@ -23,20 +33,17 @@ function M.new(options)
     local goBack = options.goBack
     local goNext = options.goNext
 
-    local session = nil
-    local profile = nil
-    local errorText = nil
-    local lastSignature = nil
+    local session=nil
+    local profile=nil
+    local errorText=nil
+    local lastSignature=nil
 
-    local function label(text)
-        return {
-            type="label",
-            w=lvgl.PERCENT_SIZE + 100,
-            color=wizard.textColor(),
-            font=wizard.metrics().fieldFont,
-            text=text,
-        }
-    end
+    local metrics=wizard.metrics()
+    local rowH=metrics.large and 30 or 21
+    local headH=metrics.large and 26 or 19
+    local statusH=metrics.large and 30 or 21
+    local xPad=metrics.large and 12 or 7
+    local font=metrics.fieldFont
 
     local function stateSignature()
         if not session then return "no-session:" .. tostring(errorText or "") end
@@ -54,14 +61,14 @@ function M.new(options)
     local function startSession()
         errorText=nil
         lastSignature=nil
-        local modelName = type(getModelName)=="function" and getModelName() or ""
-        profile, errorText = profiles.requireForAircraft("Goosky", modelName)
+        local modelName=type(getModelName)=="function" and getModelName() or ""
+        profile,errorText=profiles.requireForAircraft("Goosky",modelName)
         if not profile then session=nil; return false end
         if type(ensureModule)=="function" then
-            local ok, err = pcall(ensureModule)
+            local ok,err=pcall(ensureModule)
             if not ok then errorText=tostring(err); session=nil; return false end
         end
-        session = elrsFactory.new({ profile=profile })
+        session=elrsFactory.new({ profile=profile })
         if not session.supported() then
             errorText="ELRS CHECK UNAVAILABLE"
             return false
@@ -69,12 +76,75 @@ function M.new(options)
         return true
     end
 
-    local function row(titleText,key)
-        local current = session and session.getCurrent() or {}
-        local recommended = session and session.getRecommended() or {}
-        local currentText = tostring(current[key] or "?")
-        local targetText = tostring(recommended[key] or "?")
-        return wizard.summaryLine(titleText,nil,currentText .. "  ->  " .. targetText)
+    local function mismatchMap()
+        local map={}
+        if not session then return map end
+        for _,item in ipairs(session.getMismatches() or {}) do map[item.key]=item end
+        return map
+    end
+
+    local function canonicalCurrent(key,current,target,mismatch)
+        if current==nil or current=="?" then return "--" end
+        if not mismatch then
+            if key=="switchMode" and target=="8ch Full Resolution" then return "8ch Full" end
+            return tostring(target or current)
+        end
+        return tostring(current)
+    end
+
+    local function compactTarget(key,target)
+        if key=="switchMode" and target=="8ch Full Resolution" then return "8ch Full" end
+        return tostring(target or "--")
+    end
+
+    local function cell(text,width,color)
+        return {
+            type="rectangle", w=lvgl.PERCENT_SIZE+width, h=rowH,
+            thickness=0, align=LEFT|VCENTER,
+            children={{
+                type="label", x=xPad, w=lvgl.PERCENT_SIZE+92,
+                color=color or wizard.textColor(), font=font,
+                text=text,
+            }},
+        }
+    end
+
+    local function tableHeader()
+        local function hcell(text,width)
+            return {
+                type="rectangle", w=lvgl.PERCENT_SIZE+width, h=headH,
+                thickness=0, align=LEFT|VCENTER,
+                children={{ type="label", x=xPad, w=lvgl.PERCENT_SIZE+92,
+                    color=wizard.textColor(), font=font, text=text }},
+            }
+        end
+        return {
+            type="rectangle", w=lvgl.PERCENT_SIZE+100, h=headH,
+            thickness=0, flexPad=0, flexFlow=lvgl.FLOW_ROW, align=LEFT|VCENTER,
+            children={
+                hcell("SETTING",25), hcell("CURRENT",29), hcell("TARGET",29), hcell("STATUS",17)
+            }
+        }
+    end
+
+    local function settingRow(def,mismatches)
+        local current=session and session.getCurrent() or {}
+        local recommended=session and session.getRecommended() or {}
+        local currentValue=current[def.key]
+        if def.optional and (currentValue==nil or currentValue=="?") then return nil end
+        local target=recommended[def.key]
+        local mismatch=mismatches[def.key]
+        local currentText=canonicalCurrent(def.key,currentValue,target,mismatch)
+        local targetText=compactTarget(def.key,target)
+        local statusText=mismatch and "FIX" or ((currentValue==nil or currentValue=="?") and "--" or "OK")
+        local statusColor=mismatch and ORANGE or wizard.textColor()
+        return {
+            type="rectangle", w=lvgl.PERCENT_SIZE+100, h=rowH,
+            thickness=0, flexPad=0, flexFlow=lvgl.FLOW_ROW, align=LEFT|VCENTER,
+            children={
+                cell(def.label,25), cell(currentText,29), cell(targetText,29), cell(statusText,17,statusColor)
+            }
+        }
     end
 
     local function statusText()
@@ -84,42 +154,37 @@ function M.new(options)
         local fix=s.fix or {}
         if s.transport_error then return s.transport_error end
         if fix.stage=="error" then return fix.message or "ELRS CHANGE FAILED" end
-        if fix.stage=="complete" then return "ALL SETTINGS VERIFIED" end
-        if fix.stage~="idle" then return fix.message or "APPLYING SETTINGS" end
-        if not s.device_found then return "SEARCHING ELRS TX MODULE..." end
-        if not s.scan_complete then return "READING ELRS SETTINGS..." end
-        if session.fixRequired() then return "SETTINGS MISMATCH - FIX REQUIRED" end
-        return "ELRS SETTINGS VERIFIED"
+        if fix.stage=="complete" then return "ELRS SETTINGS VERIFIED" end
+        if fix.stage~="idle" then return fix.message or "APPLYING ELRS SETTINGS" end
+        if not s.device_found then return "SEARCHING FOR ELRS MODULE" end
+        if not s.scan_complete then return "READING ELRS SETTINGS" end
+        local count=#(session.getMismatches() or {})
+        if count>0 then
+            return tostring(count) .. (count==1 and " SETTING NEEDS CHANGE - RECEIVER OFF" or " SETTINGS NEED CHANGE - RECEIVER OFF")
+        end
+        return "ELRS PROFILE VERIFIED"
     end
 
     local function nextLabel()
-        if errorText then return "RETRY" end
-        if not session then return "RETRY" end
+        if errorText or not session then return "RETRY" end
         local s=session.getState()
         local fix=s.fix or {}
         if s.transport_error or fix.stage=="error" then return "RETRY" end
-        if fix.stage~="idle" and fix.stage~="complete" then return "WORKING..." end
-        if not s.scan_complete then return "SCANNING..." end
-        if session.fixRequired() then return "FIX SETTINGS" end
+        if fix.stage~="idle" and fix.stage~="complete" then return "APPLYING" end
+        if not s.scan_complete then return "WAIT" end
+        if session.fixRequired() then return "FIX" end
         return "NEXT  >"
     end
 
     local function nextAction()
-        if errorText or not session then
-            startSession(); M._render(); return
-        end
+        if errorText or not session then startSession(); M._render(); return end
         local s=session.getState()
         local fix=s.fix or {}
-        if s.transport_error or fix.stage=="error" then
-            startSession(); M._render(); return
-        end
+        if s.transport_error or fix.stage=="error" then startSession(); M._render(); return end
         if fix.stage~="idle" and fix.stage~="complete" then return end
         if not s.scan_complete then return end
         if session.fixRequired() then
-            -- The model has not been programmed yet, so the captured HOLD switch
-            -- cannot gate motor output here. Receiver-off status is enforced by
-            -- the ELRS module status before any TX-side setting is written.
-            local ok, err = session.beginFix({ holdOn=true })
+            local ok,err=session.beginFix({ holdOn=true })
             if not ok then errorText=err end
             M._render()
             return
@@ -129,21 +194,27 @@ function M.new(options)
 
     function M._render()
         lvgl.clear()
-        local current = session and session.getCurrent() or {}
+        local mismatches=mismatchMap()
         local children={
-            label(profile and profile.label or "ELRS RF Profile"),
-            row("Rate","packetRate"),
-            row("Channels","switchMode"),
-            row("Telemetry","telemetry"),
-            row("Model Match","modelMatch"),
-            row("Power","maxPower"),
-            row("Dynamic","dynamicPower"),
+            {
+                type="rectangle", w=lvgl.PERCENT_SIZE+100, h=headH,
+                thickness=0, align=LEFT|VCENTER,
+                children={{ type="label", x=xPad, w=lvgl.PERCENT_SIZE+96,
+                    color=wizard.textColor(), font=font,
+                    text=profile and profile.label or "ELRS RF Profile" }},
+            },
+            tableHeader(),
         }
-        if current.antennaMode ~= nil and current.antennaMode ~= "?" then
-            children[#children+1]=row("Antenna","antennaMode")
+        for _,def in ipairs(ROWS) do
+            local r=settingRow(def,mismatches)
+            if r then children[#children+1]=r end
         end
-        children[#children+1]=label(statusText())
-        children[#children+1]=label("Power OFF the helicopter before using FIX SETTINGS.")
+        children[#children+1]={
+            type="rectangle", w=lvgl.PERCENT_SIZE+100, h=statusH,
+            thickness=0, align=LEFT|VCENTER,
+            children={{ type="label", x=xPad, w=lvgl.PERCENT_SIZE+96,
+                color=wizard.textColor(), font=font, text=statusText() }},
+        }
 
         lvgl.build(wizard.fullPage({
             title=title, subtitle="ELRS Settings",
@@ -156,30 +227,19 @@ function M.new(options)
         lastSignature=stateSignature()
     end
 
-    function M.enter()
-        startSession()
-        M._render()
-    end
-
+    function M.enter() startSession(); M._render() end
     function M.update()
         if session then session.update(true) end
         local signature=stateSignature()
         if signature~=lastSignature then M._render() end
     end
-
     function M.isReady()
         return session and session.scanComplete()
             and not session.getState().transport_error
             and not session.fixRequired()
     end
-
-    function M.getProfileId()
-        return profile and profile.id or nil
-    end
-
-    function M.reset()
-        session=nil; profile=nil; errorText=nil; lastSignature=nil
-    end
+    function M.getProfileId() return profile and profile.id or nil end
+    function M.reset() session=nil; profile=nil; errorText=nil; lastSignature=nil end
 
     return M
 end
