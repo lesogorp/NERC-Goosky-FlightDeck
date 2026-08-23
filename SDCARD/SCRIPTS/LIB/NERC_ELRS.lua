@@ -518,6 +518,7 @@ function M.new(options)
     local function begin_fix(gates)
         gates = gates or {}
         if not gates.holdOn then return false, "ENABLE THROTTLE HOLD FIRST" end
+        if state.armed then return false, "ELRS REPORTS ARMED - POWER OFF HELICOPTER" end
         if state.connected or (type(gates.linkConnected) == "function" and gates.linkConnected()) then
             return false, "POWER OFF HELICOPTER FIRST"
         end
@@ -541,6 +542,7 @@ function M.new(options)
         if not safe_preflight then set_fix("error", "PRECHECK CHANGED - CHANGE CANCELLED"); return end
         local now = now_fn()
         if now > fix.deadline then set_fix("error", "CHANGE NOT VERIFIED - USE ELRS LUA"); return end
+        if state.armed then set_fix("error", "ELRS ARMED - CHANGE CANCELLED"); return end
         if state.connected then set_fix("error", "RECEIVER CONNECTED - CHANGE CANCELLED"); return end
         if not reads_idle() or now < (fix.next_action or 0) then return end
 
