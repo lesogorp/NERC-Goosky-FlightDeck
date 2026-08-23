@@ -1,11 +1,18 @@
--- Companion-only telemetry and ExpressLRS simulator for NERC_GSkyFD.
+-- Companion-only FlightDeck telemetry sensor simulator.
 -- Do not copy this file to a flight radio. The VS Code simulator task places
 -- it beside main.lua only inside the selected Companion simulator SD folder.
+--
+-- ELRS module emulation lives separately in /SCRIPTS/LIB/NERC_ELRS_SIM.lua so
+-- dashboard telemetry scenarios never change ELRS connection/armed/settings
+-- state used by the model wizard.
 
-local simulator = { is_goosky_simulator = true }
+local simulator = {
+    is_goosky_simulator = true,
+    is_goosky_telemetry_simulator = true,
+}
 
 -- Set to nil for the automatic cycle, or use one of the names below to hold a
--- scenario indefinitely while adjusting the layout.
+-- dashboard telemetry scenario indefinitely while adjusting the layout.
 local FORCED_SCENARIO = nil
 local SCENARIO_SECONDS = 10
 local scenarios = {
@@ -15,8 +22,6 @@ local scenarios = {
     "LINK WEAK",
     "LINK CRITICAL",
     "TELEMETRY LOST",
-    "MODEL MISMATCH",
-    "ELRS SETUP BAD",
     "LIHV PACK"
 }
 
@@ -91,91 +96,39 @@ function simulator.getSensor(name, now)
     return value
 end
 
-local queue = {}
-local parameters = {
-    { "Packet Rate", "50Hz;333Hz Full (-105dBm)", 1, "" },
-    { "Telem Ratio", "Std;Off;1:128;1:64;1:32", 4, "" },
-    { "Switch Mode", "8ch;16ch Rate/2;12ch Mixed", 0, "" },
-    { "Model Match", "Off;On", 1, " (ID: 07)" },
-    { "Max Power", "10;25;50;100;250", 3, "mW" },
-    { "Dynamic", "Off;Dyn;AUX9;AUX10;AUX11;AUX12", 0, "" }
-}
-local last_parameter_scenario = nil
+-- Temporary compatibility adapter for the current FlightDeck ELRS monitor.
+-- The actual ELRS simulator data/state is maintained in a separate module so
+-- these calls cannot inherit or react to the telemetry scenario above.
+local elrsBackend = nil
+local elrsBackendLoaded = false
 
-local function push_string(target, value)
-    for index = 1, #value do
-        target[#target + 1] = string.byte(value, index)
+local function getElrsBackend()
+    if elrsBackendLoaded then return elrsBackend end
+    elrsBackendLoaded = true
+    if type(loadScript) ~= "function" then return nil end
+    local okLoader, loader = pcall(loadScript, "/SCRIPTS/LIB/NERC_ELRS_SIM.lua")
+    if not okLoader or type(loader) ~= "function" then return nil end
+    local okBackend, backend = pcall(loader)
+    if okBackend and type(backend) == "table" and backend.is_nerc_elrs_simulator then
+        elrsBackend = backend
     end
-    target[#target + 1] = 0
-end
-
-local function apply_parameter_scenario(now)
-    local name = scenario_name(now)
-    if last_parameter_scenario == name then return end
-    last_parameter_scenario = name
-
-    if name == "ELRS SETUP BAD" then
-        parameters[1][3] = 0 -- 50Hz
-        parameters[2][3] = 0 -- Standard telemetry ratio
-        parameters[3][3] = 2 -- 12ch Mixed
-        parameters[5][3] = 1 -- 25mW
-        parameters[6][3] = 1 -- Dynamic power on
-    else
-        parameters[1][3] = 1
-        parameters[2][3] = 4
-        parameters[3][3] = 0
-        parameters[5][3] = 3
-        parameters[6][3] = 0
-    end
-end
-
-local function queue_parameter(field_id, handset_id)
-    local parameter = parameters[field_id]
-    local data = { handset_id or 0xEF, 0xEE, field_id, 0, 0, 9 }
-    push_string(data, parameter[1])
-    push_string(data, parameter[2])
-    data[#data + 1] = parameter[3]
-    data[#data + 1] = 0
-    data[#data + 1] = 0
-    data[#data + 1] = 0
-    push_string(data, parameter[4])
-    queue[#queue + 1] = { 0x2B, data }
+    return elrsBackend
 end
 
 function simulator.push(command, data, now)
-    apply_parameter_scenario(now)
-    if command == 0x28 then
-        local info = { 0xEA, 0xEE }
-        push_string(info, "SIM ELRS TX")
-        info[#info + 1] = 0x45
-        info[#info + 1] = 0x4C
-        info[#info + 1] = 0x52
-        info[#info + 1] = 0x53
-        for _ = 1, 8 do info[#info + 1] = 0 end
-        info[#info + 1] = #parameters
-        queue[#queue + 1] = { 0x29, info }
-    elseif command == 0x2C then
-        queue_parameter(data[3], data[2])
-    elseif command == 0x2D then
-        if data[3] == 0 then
-            local flags = scenario_name(now) == "MODEL MISMATCH" and 5 or 1
-            queue[#queue + 1] = { 0x2E, { data[2], 0xEE, 0, 0, 0, flags } }
-        else
-            local parameter = parameters[data[3]]
-            if not parameter then return false end
-            parameter[3] = data[4]
-            if data[3] == 1 and data[4] == 1 then
-                parameters[3][2] = "8ch;16ch Rate/2;12ch Mixed"
-            end
-        end
+    local backend = getElrsBackend()
+    if backend and type(backend.push) == "function" then
+        return backend.push(command, data, now)
     end
-    return true
+    return false
 end
 
-function simulator.pop()
-    if #queue == 0 then return nil end
-    local frame = table.remove(queue, 1)
-    return frame[1], frame[2]
+function simulator.pop(now)
+    local backend = getElrsBackend()
+    if backend and type(backend.pop) == "function" then
+        return backend.pop(now)
+    end
+    return nil
 end
 
 return simulator
