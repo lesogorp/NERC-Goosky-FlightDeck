@@ -5,15 +5,18 @@
 1. Open the repository root in Visual Studio Code.
 2. Edit the canonical files under `SDCARD`.
 3. Press `Ctrl+Shift+B` to run `EdgeTX: Simulate TX16S MK3`.
-4. The task runs the Lua tests, merges the current `SDCARD` payload into the
-   correct EdgeTX screen-size SD pack, injects `dev/simulator.lua`, closes the
-   previous EdgeTX simulator instance, and launches a fresh simulator.
+4. The task merges the current `SDCARD` payload into the correct EdgeTX
+   screen-size SD pack, injects the development telemetry and ELRS simulators,
+   closes the previous EdgeTX simulator instance, and launches a fresh
+   simulator.
 5. Use `EdgeTX: Simulate GX15` from **Tasks: Run Task** for the compact-radio
    target. On official Companion 2.12 builds without a GX15 simulator target,
    this task uses the TX15 480x320 simulator as the UI/layout proxy.
-6. Test safety-sensitive behavior on the physical radio with the motor
+6. Run `EdgeTX: Run widget tests` separately, or use one of the `Test + Simulate`
+   tasks when you want the full regression suite to gate simulator launch.
+7. Test safety-sensitive behavior on the physical radio with the motor
    disconnected or the blades removed.
-7. Build the install ZIP with `bash tools/build-release.sh`.
+8. Build the install ZIP with `bash tools/build-release.sh`.
 
 See [TESTING.md](TESTING.md) for simulator and hardware-test details.
 
@@ -49,9 +52,13 @@ Available VS Code tasks:
 - `EdgeTX: Run widget tests` - Lua desktop/mock regression tests only.
 - `EdgeTX: Sync MK3 simulator SD` - merge into `c800x480` without launching.
 - `EdgeTX: Sync GX15 simulator SD` - merge into `c480x320` without launching.
-- `EdgeTX: Simulate TX16S MK3` - tests, sync `c800x480`, then launch MK3.
-- `EdgeTX: Simulate GX15` - tests, sync `c480x320`, then launch the compact
-  simulator target.
+- `EdgeTX: Simulate TX16S MK3` - sync `c800x480`, then launch MK3.
+- `EdgeTX: Simulate GX15` - sync `c480x320`, then launch the compact simulator
+  target.
+- `EdgeTX: Test + Simulate TX16S MK3` - run the regression suite first, then
+  launch MK3 only if it passes.
+- `EdgeTX: Test + Simulate GX15` - run the regression suite first, then launch
+  the compact simulator only if it passes.
 
 If the installed Companion build does not contain a GX15 simulator target,
 `edgetx-tx15` is the intended 480x320 UI/layout proxy. Point `simulatorExe` at a
