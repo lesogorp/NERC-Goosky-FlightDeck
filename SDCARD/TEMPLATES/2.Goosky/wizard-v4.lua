@@ -20,6 +20,7 @@ local page = 1
 local pages = {}
 local switchPage
 local completePage
+local switchLedState = nil
 
 local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
 local standardColors = { "Orange", "Blue", "Purple" }
@@ -204,6 +205,33 @@ local function allSwitchesAssigned()
     return s.atti and s.bank and s.hold and s.reset
 end
 
+local function setSwitchPageRingState(mode)
+    if mode == switchLedState then return end
+    if not LED_STRIP_LENGTH or LED_STRIP_LENGTH <= 0
+        or type(setRGBLedColor) ~= "function"
+        or type(applyRGBLedColors) ~= "function" then
+        switchLedState = mode
+        return
+    end
+
+    -- EdgeTX 2.12 exposes the decorative/gimbal LEDs first and, where present,
+    -- the six SW1-SW6 LEDs last. This page owns only the gimbal/decorative LEDs;
+    -- leave SW1-SW6 untouched for the model/widget to use later.
+    local ringCount = LED_STRIP_LENGTH >= 26 and (LED_STRIP_LENGTH - 6) or LED_STRIP_LENGTH
+    local r,g,b = 0,0,0
+    if mode == "waiting" then
+        r = 255
+    elseif mode == "ready" then
+        g = 255
+    end
+
+    for id=0,ringCount-1 do
+        setRGBLedColor(id,r,g,b)
+    end
+    applyRGBLedColors()
+    switchLedState = mode
+end
+
 local function receiverIdRequired()
     local m=models[state.model]
     return m == "S1 V2" or m == "S2 MAX"
@@ -213,7 +241,7 @@ local function cleanScalar(v)
     if not v then return nil end
     v = string.match(v, "^%s*(.-)%s*$") or v
     local first,last=string.sub(v,1,1),string.sub(v,-1)
-    if (first=='"' and last=='"') or (first=="'" and last=="'") then
+    if (first=='\"' and last=='\"') or (first=="'" and last=="'") then
         v=string.sub(v,2,-2)
     end
     return v
@@ -616,18 +644,28 @@ local function init()
     buildSwitchSources()
     pages={modelPage,switchPage,reviewPage,completePage}
     page=1
+    switchLedState=nil
     pages[1]()
 end
 
 local function run(event,touchState)
-    if page==2 and state.capture.active~=nil then captureMovedSwitch() end
+    if page==2 then
+        if state.capture.active~=nil then captureMovedSwitch() end
+        setSwitchPageRingState(allSwitchesAssigned() and "ready" or "waiting")
+    elseif switchLedState~=nil then
+        -- Do not leave wizard-owned LED state active after the switch page.
+        setSwitchPageRingState("off")
+    end
 
     if event==EVT_VIRTUAL_PREV_PAGE and page>1 then
         killEvents(event); selectPage(-1)
     elseif event==EVT_VIRTUAL_NEXT_PAGE and page<#pages then
         if page~=2 or allSwitchesAssigned() then killEvents(event); selectPage(1) end
     end
-    if wizard.exitWizard() then return 2 end
+    if wizard.exitWizard() then
+        if switchLedState~=nil then setSwitchPageRingState("off") end
+        return 2
+    end
     return 0
 end
 
