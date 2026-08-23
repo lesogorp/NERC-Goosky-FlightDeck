@@ -22,8 +22,11 @@ local pages = {}
 local switchPage
 local elrsPage
 local completePage
+local safetyPage
 local elrsStage=nil
 local wizardLedSignature = nil
+local safetyBlocked = false
+local telemetrySwitchIndex = nil
 
 local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
 local standardColors = { "Orange", "Blue", "Purple" }
@@ -129,6 +132,27 @@ local function sideLabel(text)
         font=wizard.metrics().fieldFont,
         text=text,
     }
+end
+
+-- EdgeTX exposes TELE as a native special switch backed by TELEMETRY_STREAMING().
+-- This is intentionally the outermost safety gate: the wizard must not change
+-- module/model settings, inspect ELRS parameters, or program a model while any
+-- receiver is actively linked to the radio.
+local function telemetryLinkActive()
+    if type(getSwitchIndex) ~= "function" or type(getSwitchValue) ~= "function" then
+        return false
+    end
+    if telemetrySwitchIndex == nil then
+        telemetrySwitchIndex = 0
+        for _,name in ipairs({ "TELE", "Telemetry", "TELEM" }) do
+            local ok,index=pcall(getSwitchIndex,name)
+            if ok and index and index~=0 then telemetrySwitchIndex=index; break end
+        end
+    end
+    if not telemetrySwitchIndex or telemetrySwitchIndex==0 then return false end
+    local ok,value=pcall(getSwitchValue,telemetrySwitchIndex)
+    if not ok then return false end
+    return value==true or (type(value)=="number" and value~=0)
 end
 
 local function previewChildren()
@@ -434,6 +458,7 @@ local function receiverIdReady()
 end
 
 local function ensureInternalElrsForCheck()
+    if telemetryLinkActive() then error("POWER OFF HELICOPTER - TELEMETRY ACTIVE") end
     if not profileReady() then error("Selected model profile is not yet verified") end
     if state.receiver.status~="ok" or not state.receiver.id then allocateReceiverId() end
     if not receiverIdReady() then error("No valid Receiver ID is available") end
@@ -447,9 +472,30 @@ local function ensureInternalElrsForCheck()
     end
 end
 
+safetyPage=function()
+    lvgl.clear()
+    setStaticWizardLeds("error")
+    lvgl.build(wizard.fullPage({
+        title=TITLE, subtitle="Safety Check",
+        hasPrevious=false, hasNext=false,
+        children={
+            label("HELICOPTER POWER / TELEMETRY DETECTED"),
+            label("Power off the helicopter before using this wizard."),
+            label("No receiver may be linked while setup or ELRS settings are changed."),
+            label("The wizard will resume automatically after telemetry is inactive."),
+        },
+    }))
+end
+
 local function selectPage(step)
     local target=page+step
     if target<1 or target>#pages then return end
+    if step>0 and telemetryLinkActive() then
+        safetyBlocked=true
+        if elrsStage then elrsStage.reset() end
+        safetyPage()
+        return
+    end
     state.capture.active=nil
     resetCaptureCandidate()
     page=target
@@ -568,6 +614,7 @@ local function captureMovedSwitch()
 end
 
 elrsPage=function()
+    if telemetryLinkActive() then safetyBlocked=true; safetyPage(); return end
     setStaticWizardLeds("elrs-check")
     if elrsStage then elrsStage.enter() end
 end
@@ -606,6 +653,11 @@ local function reviewPage()
 end
 
 local function runApplyBackend()
+    if telemetryLinkActive() then
+        state.apply.status="failed"
+        state.apply.error="HELICOPTER POWER / TELEMETRY DETECTED - PROGRAMMING CANCELLED"
+        return false
+    end
     if state.apply.status=="success" then return true end
     state.apply.status="running"; state.apply.error=nil
     if type(collectgarbage)=="function" then collectgarbage("collect") end
@@ -649,7 +701,8 @@ end
 
 completePage=function()
     if state.apply.status=="not-run" then
-        if not profileReady() then state.apply.status="failed"; state.apply.error="Selected model profile is not yet verified"
+        if telemetryLinkActive() then state.apply.status="failed"; state.apply.error="HELICOPTER POWER / TELEMETRY DETECTED"
+        elseif not profileReady() then state.apply.status="failed"; state.apply.error="Selected model profile is not yet verified"
         elseif not receiverIdReady() then state.apply.status="failed"; state.apply.error="No valid Receiver ID is available"
         elseif not elrsStage or not elrsStage.isReady() then state.apply.status="failed"; state.apply.error="ELRS settings are not verified"
         else
@@ -698,22 +751,50 @@ completePage=function()
     }))
 end
 
+local function enforceSafetyGate()
+    if telemetryLinkActive() then
+        if not safetyBlocked then
+            safetyBlocked=true
+            state.capture.active=nil
+            resetCaptureCandidate()
+            if elrsStage then elrsStage.reset() end
+            if state.apply.status=="pending" or state.apply.status=="running" then
+                state.apply.status="failed"
+                state.apply.error="HELICOPTER POWER / TELEMETRY DETECTED - OPERATION CANCELLED"
+            end
+            safetyPage()
+        end
+        return false
+    end
+    if safetyBlocked then
+        safetyBlocked=false
+        if pages[page] then pages[page]() end
+    end
+    return true
+end
+
 local function init()
     buildSwitchSources()
     elrsStage=elrsStageFactory.new({
         wizard=wizard, title=TITLE,
         getModelName=function() return models[state.model] end,
         ensureModule=ensureInternalElrsForCheck,
+        linkConnected=telemetryLinkActive,
         goBack=function() selectPage(-1) end,
         goNext=function() selectPage(1) end,
     })
     pages={modelPage,switchPage,elrsPage,reviewPage,completePage}
-    page=1; wizardLedSignature=nil
+    page=1; wizardLedSignature=nil; safetyBlocked=false; telemetrySwitchIndex=nil
     state.apply.status="not-run"; state.apply.error=nil; state.apply.startedAt=0
-    pages[1]()
+    if telemetryLinkActive() then safetyBlocked=true; safetyPage() else pages[1]() end
 end
 
 local function run(event,touchState)
+    if not enforceSafetyGate() then
+        if wizard.exitWizard() then clearWizardLeds(); return 2 end
+        return 0
+    end
+
     if page==1 then
         setStaticWizardLeds("setup")
     elseif page==2 then
