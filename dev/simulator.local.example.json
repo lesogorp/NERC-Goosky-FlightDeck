@@ -1,0 +1,16 @@
+{
+  "simulatorExe": "",
+  "sdPath": "C:\\EdgeTX\\NERC-Simulator-SD",
+  "stopExisting": true,
+  "injectTelemetrySimulation": true,
+  "targets": {
+    "mk3": {
+      "profile": "NERC MK3",
+      "radio": ""
+    },
+    "gx15": {
+      "profile": "NERC GX15",
+      "radio": ""
+    }
+  }
+}
