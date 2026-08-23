@@ -50,7 +50,7 @@ local NAV_FONT = LARGE_LCD and DBLSIZE or MIDSIZE
 local FIELD_FONT = 0
 local RADIUS = LARGE_LCD and 12 or 8
 local IMAGE_PAD = LARGE_LCD and 24 or 12
-local IMAGE_STATUS_RESERVE = LARGE_LCD and 100 or 72
+local IMAGE_STATUS_RESERVE = LARGE_LCD and 150 or 72
 local exit = false
 
 function wizard.isLargeLCD()
@@ -377,7 +377,7 @@ function wizard.image(settings)
         w = math.max(1, LCD_W * 40 / 100 - border * 2),
         -- Leave a fixed status area below the model preview. Review/Complete
         -- pages append text after the image, and without this reserve the text
-        -- lands on the lower body/navigation separator on 480x320 displays.
+        -- lands on the lower body/navigation separator on color LCD radios.
         h = math.max(1, lvgl.PAGE_BODY_HEIGHT - NAV_H - border * 2 - IMAGE_STATUS_RESERVE),
         file = settings.file,
         visible = settings.visibleFunc,
