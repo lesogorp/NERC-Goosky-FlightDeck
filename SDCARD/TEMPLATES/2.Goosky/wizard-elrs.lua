@@ -249,6 +249,14 @@ function M.new(options)
             and not session.getState().transport_error
             and not session.fixRequired()
     end
+    function M.getLedState()
+        if errorText or not session then return "checking" end
+        local s=session.getState()
+        local fix=s.fix or {}
+        if not s.scan_complete then return "checking" end
+        if s.transport_error or fix.stage=="error" or session.fixRequired() then return "mismatch" end
+        return "ready"
+    end
     function M.getProfileId() return profile and profile.id or nil end
     function M.reset() session=nil; profile=nil; errorText=nil; lastSignature=nil end
 
