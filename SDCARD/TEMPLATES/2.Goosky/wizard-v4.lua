@@ -1,7 +1,8 @@
--- NERC Goosky BNF Wizard v1 diagnostic build
+-- NERC Goosky BNF Wizard v1
 -- EdgeTX 2.12 color radios
--- Bounded-memory Receiver ID scan + low-latency settled switch capture.
--- No ELRS check/fix and no model writes yet.
+-- Hardware-validated low-latency switch capture and Receiver ID allocation.
+-- Programs verified S1 V2 / S2 MAX profiles only.
+-- No ELRS operating-parameter validation or auto-fix logic.
 
 local RUN_DIR = "/TEMPLATES/2.Goosky"
 local IMAGE_DIR = "/IMAGES/"
@@ -13,21 +14,29 @@ local MAX_RECEIVER_ID = 63
 local TARGET_MODULE_INDEX = 0
 local TARGET_RF_TYPE = "TYPE_CROSSFIRE"
 local TARGET_RF_SUBTYPE = "0"
-local SWITCH_SETTLE_TICKS = 20 -- getTime() is 10 ms/tick = 200 ms
+local SWITCH_SETTLE_TICKS = 20
 
 local page = 1
 local pages = {}
 local switchPage
+local completePage
 
 local models = { "S1 V1", "S1 V2", "S2 Legend V1", "S2 MAX", "RS4 Venom" }
 local standardColors = { "Orange", "Blue", "Purple" }
 local rs4VenomColors = { "Orange", "Green" }
-local timers = { "3:00", "3:30", "4:00", "4:30", "5:00", "5:30", "6:00" }
+local timers = {}
+local timerSeconds = {}
+for seconds = 30, 1200, 30 do
+    local m = math.floor(seconds / 60)
+    local s = seconds % 60
+    timers[#timers + 1] = string.format("%d:%02d", m, s)
+    timerSeconds[#timerSeconds + 1] = seconds
+end
 
 local state = {
     model = 2,
     color = 1,
-    timer = 5,
+    timer = 10,
     switches = { atti=nil, bank=nil, hold=nil, reset=nil },
     capture = {
         active=nil,
@@ -46,9 +55,8 @@ local state = {
         usedIds=0,
         maskLo=0,
         maskHi=0,
-        memBefore=0,
-        memAfter=0,
     },
+    apply = { status="not-run", error=nil },
 }
 
 local switchRows = {
@@ -57,6 +65,11 @@ local switchRows = {
     { key="hold", label="THROTTLE HOLD" },
     { key="reset", label="TIMER RESET" },
 }
+
+local function profileReady()
+    local m=models[state.model]
+    return m == "S1 V2" or m == "S2 MAX"
+end
 
 local function currentColors()
     if models[state.model] == "RS4 Venom" then return rs4VenomColors end
@@ -285,27 +298,8 @@ local function idUsed(id)
     return bit32.band(state.receiver.maskHi,bit32.lshift(1,id-32))~=0
 end
 
-local function usedIdText()
-    local out=""
-    local shown=0
-    for id=1,MAX_RECEIVER_ID do
-        if idUsed(id) then
-            if shown>0 then out=out.."," end
-            out=out..id
-            shown=shown+1
-            if shown>=8 then
-                if state.receiver.usedIds>shown then out=out..",..." end
-                break
-            end
-        end
-    end
-    if out=="" then return "none" end
-    return out
-end
-
 local function allocateReceiverId()
     local r=state.receiver
-    r.memBefore=type(collectgarbage)=="function" and math.floor(collectgarbage("count")+0.5) or 0
     r.id=nil; r.status="scan-error"; r.scannedModels=0; r.matchingModels=0; r.usedIds=0
     r.maskLo=0; r.maskHi=0
     if type(dir)~="function" then return end
@@ -336,16 +330,11 @@ local function allocateReceiverId()
     end
 
     for id=1,MAX_RECEIVER_ID do if idUsed(id) then r.usedIds=r.usedIds+1 end end
-
-    -- Receiver ID 0 behaves as the EdgeTX/CRSF default and is intentionally
-    -- reserved. Allocate only 1..63 so AUTO always chooses an explicit ID.
     for id=1,MAX_RECEIVER_ID do
         if not idUsed(id) then r.id=id; r.status="ok"; break end
     end
     if r.id==nil then r.status="full" end
-
     filename=nil; nextFile=nil
-    r.memAfter=type(collectgarbage)=="function" and math.floor(collectgarbage("count")+0.5) or 0
 end
 
 local function receiverIdDisplay()
@@ -377,15 +366,21 @@ local function modelPage()
         nextLabel="NEXT  >", nextFunc=function() selectPage(1) end,
         children1={
             choiceRow("Goosky model",models,function() return state.model end,function(value)
-                if state.model~=value then state.model=value; state.color=1; modelPage() end
+                if state.model~=value then
+                    state.model=value; state.color=1; state.apply.status="not-run"; modelPage()
+                end
             end),
-            choiceRow("Color",colors,function() return state.color end,function(value) state.color=value end),
-            choiceRow("Flight timer",timers,function() return state.timer end,function(value) state.timer=value end),
+            choiceRow("Color",colors,function() return state.color end,function(value)
+                state.color=value; state.apply.status="not-run"
+            end),
+            choiceRow("Flight timer",timers,function() return state.timer end,function(value)
+                state.timer=value; state.apply.status="not-run"
+            end),
         },
         children2={
             label("Select the helicopter, color and flight timer."),
             label("Switches are assigned on the next page."),
-            label("No model programming occurs in this test build."),
+            label(profileReady() and "Verified profile: ready to configure." or "Profile visible for future support; programming is blocked."),
         },
     }))
 end
@@ -442,6 +437,7 @@ local function finishCapture(name,position)
     local key=state.capture.active
     if not key then return end
     state.switches[key]={name=name,position=position}
+    state.apply.status="not-run"
     state.capture.active=nil
     resetCaptureCandidate()
 end
@@ -489,17 +485,21 @@ end
 
 local function reviewPage()
     lvgl.clear()
-    allocateReceiverId()
+    if receiverIdRequired() then allocateReceiverId() end
     local colors=currentColors()
-    local r=state.receiver
     local children2=previewChildren()
-    children2[#children2+1]=label("Scan "..r.scannedModels.." / CRSF "..r.matchingModels.." / IDs "..r.usedIds)
-    children2[#children2+1]=label("Used: "..usedIdText())
-    children2[#children2+1]=label("ID 0 reserved")
-    children2[#children2+1]=label("Lua KB: "..r.memBefore.." -> "..r.memAfter)
+    if profileReady() then
+        children2[#children2+1]=label("READY TO PROGRAM")
+        children2[#children2+1]=label("Safety: disconnect motor or remove blades before testing.")
+    else
+        children2[#children2+1]=label("PROFILE NOT VERIFIED")
+        children2[#children2+1]=label("Programming is intentionally blocked for this model.")
+    end
+
     lvgl.build(wizard.page({
-        title=TITLE, subtitle="Review / Confirm", hasPrevious=true, hasNext=receiverIdReady(),
-        previousLabel="<  BACK", nextLabel="CONFIRM",
+        title=TITLE, subtitle="Review / Confirm", hasPrevious=true,
+        hasNext=profileReady() and receiverIdReady(),
+        previousLabel="<  BACK", nextLabel="PROGRAM MODEL",
         previousFunc=function() selectPage(-1) end,
         nextFunc=function() selectPage(1) end,
         children1={
@@ -516,23 +516,88 @@ local function reviewPage()
     }))
 end
 
-local function completePage()
+local function runApplyBackend()
+    if state.apply.status=="success" then return true end
+    state.apply.status="running"
+    state.apply.error=nil
+
+    if type(collectgarbage)=="function" then collectgarbage("collect") end
+    local loader=loadScript(RUN_DIR .. "/wizard-apply.lua")
+    if type(loader)~="function" then
+        state.apply.status="failed"
+        state.apply.error="Cannot load wizard-apply.lua"
+        return false
+    end
+
+    local apply=loader()
+    loader=nil
+    if type(apply)~="function" then
+        state.apply.status="failed"
+        state.apply.error="Invalid wizard apply backend"
+        return false
+    end
+
+    local payload={
+        modelName=models[state.model],
+        color=currentColors()[state.color],
+        timerSeconds=timerSeconds[state.timer],
+        receiverId=state.receiver.id,
+        atti=state.switches.atti,
+        bank=state.switches.bank,
+        hold=state.switches.hold,
+        reset=state.switches.reset,
+    }
+    local ok,result=pcall(apply,payload)
+    apply=nil; payload=nil
+    if type(collectgarbage)=="function" then collectgarbage("collect") end
+
+    if not ok then
+        state.apply.status="failed"
+        state.apply.error=tostring(result or "Unknown model programming error")
+        return false
+    end
+    state.apply.status="success"
+    return true
+end
+
+completePage=function()
     lvgl.clear()
+    if not profileReady() then
+        state.apply.status="failed"
+        state.apply.error="Selected model profile is not yet verified"
+    elseif not receiverIdReady() then
+        state.apply.status="failed"
+        state.apply.error="No valid Receiver ID is available"
+    else
+        runApplyBackend()
+    end
+
     local colors=currentColors()
+    local ok=state.apply.status=="success"
+    local children2=previewChildren()
+    children2[#children2+1]=label(ok and "MODEL PROGRAMMED" or "PROGRAMMING FAILED")
+    if ok then
+        children2[#children2+1]=label("Verify controls, HOLD, banks and ATT before flight.")
+        children2[#children2+1]=label("Discover telemetry with the receiver powered and linked.")
+    else
+        children2[#children2+1]=label(state.apply.error or "Unknown error")
+    end
+
     lvgl.build(wizard.page({
-        title=TITLE, subtitle="Confirmed", hasPrevious=true, hasNext=false,
+        title=TITLE, subtitle=ok and "Complete" or "Error",
+        hasPrevious=not ok, hasNext=false,
         previousLabel="<  BACK", previousFunc=function() selectPage(-1) end,
         children1={
             wizard.summaryLine("Model",nil,models[state.model]),
             wizard.summaryLine("Color",nil,colors[state.color]),
             wizard.summaryLine("Receiver ID",nil,receiverIdDisplay()),
+            wizard.summaryLine("Timer",nil,timers[state.timer]),
             wizard.summaryLine("ATTI",nil,assignmentDisplay("atti")),
             wizard.summaryLine("BANK",nil,assignmentDisplay("bank")),
             wizard.summaryLine("HOLD",nil,assignmentDisplay("hold")),
             wizard.summaryLine("RESET",nil,assignmentDisplay("reset")),
-            label("Diagnostic flow confirmed. Hold [RTN] to exit."),
         },
-        children2=previewChildren(),
+        children2=children2,
     }))
 end
 
@@ -544,9 +609,7 @@ local function init()
 end
 
 local function run(event,touchState)
-    if page==2 and state.capture.active~=nil then
-        captureMovedSwitch()
-    end
+    if page==2 and state.capture.active~=nil then captureMovedSwitch() end
 
     if event==EVT_VIRTUAL_PREV_PAGE and page>1 then
         killEvents(event); selectPage(-1)
