@@ -31,12 +31,14 @@ function Find-SimulatorExecutable {
 
     $candidates = @()
     if ($env:ProgramFiles) {
+        $candidates += (Join-Path $env:ProgramFiles "EdgeTX\Companion 2.12\bin\simulator.exe")
+        $candidates += (Join-Path $env:ProgramFiles "EdgeTX\Companion 2.12.2\bin\simulator.exe")
         $candidates += (Join-Path $env:ProgramFiles "EdgeTX\Companion 2.12\simulator.exe")
-        $candidates += (Join-Path $env:ProgramFiles "EdgeTX\Companion 2.12.2\simulator.exe")
     }
     if (${env:ProgramFiles(x86)}) {
+        $candidates += (Join-Path ${env:ProgramFiles(x86)} "EdgeTX\Companion 2.12\bin\simulator.exe")
+        $candidates += (Join-Path ${env:ProgramFiles(x86)} "EdgeTX\Companion 2.12.2\bin\simulator.exe")
         $candidates += (Join-Path ${env:ProgramFiles(x86)} "EdgeTX\Companion 2.12\simulator.exe")
-        $candidates += (Join-Path ${env:ProgramFiles(x86)} "EdgeTX\Companion 2.12.2\simulator.exe")
     }
 
     foreach ($candidate in $candidates) {
@@ -85,20 +87,15 @@ function Resolve-TargetSdPath {
         [Parameter(Mandatory = $true)][string]$TargetName
     )
 
-    # Highest priority: an explicit full path on the target itself.
     if ($TargetConfig.sdPath) {
         return Resolve-LocalPath ([string]$TargetConfig.sdPath)
     }
 
-    # Preferred layout for official EdgeTX SD packs:
-    #   <sdRoot>\c800x480  -> TX16S MK3
-    #   <sdRoot>\c480x320  -> GX15 / TX15 class
     if ($Config.sdRoot -and $TargetConfig.sdFolder) {
         $root = Resolve-LocalPath ([string]$Config.sdRoot)
         return [System.IO.Path]::GetFullPath((Join-Path $root ([string]$TargetConfig.sdFolder)))
     }
 
-    # Backward compatibility with the original single-SD configuration.
     if ($Config.sdPath) {
         return Resolve-LocalPath ([string]$Config.sdPath)
     }
@@ -124,7 +121,7 @@ $targetConfig = $targetProperty.Value
 $profile = [string]$targetConfig.profile
 $radio = [string]$targetConfig.radio
 if (-not $profile -and -not $radio) {
-    throw "targets.$Target must define profile and/or radio. Using a dedicated Companion radio profile is recommended."
+    throw "targets.$Target must define profile and/or radio."
 }
 
 $simulatorExe = Find-SimulatorExecutable ([string]$config.simulatorExe)
@@ -173,9 +170,13 @@ if ($SyncOnly) {
     exit 0
 }
 
+# IMPORTANT: --sd-path selects the SD asset pack only. Do not pass
+# --start-with sd here. That option tells the simulator to load the radio's
+# persistent model/radio data from <sd-path>\RADIO\radio.yml, which the normal
+# EdgeTX screen-size SD packs do not contain. The Companion profile supplies
+# the simulator radio/model data; --sd-path supplies SCRIPTS/WIDGETS/IMAGES/etc.
 $arguments = @(
-    "--sd-path", ('"' + $sdPath + '"'),
-    "--start-with", "sd"
+    "--sd-path", ('"' + $sdPath + '"')
 )
 if ($profile) {
     $arguments += @("--profile", ('"' + $profile + '"'))
