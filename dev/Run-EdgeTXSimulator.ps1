@@ -79,7 +79,6 @@ function Stop-ExistingSimulator {
 }
 
 $configPath = Join-Path $PSScriptRoot "simulator.local.json"
-$examplePath = Join-Path $PSScriptRoot "simulator.local.example.json"
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw "Missing dev\simulator.local.json. Copy dev\simulator.local.example.json to simulator.local.json and set the local EdgeTX paths/profile names."
 }
@@ -87,6 +86,9 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 if (-not $config.sdPath) {
     throw "simulator.local.json must define sdPath."
+}
+if (-not $config.targets) {
+    throw "simulator.local.json must define targets."
 }
 
 $targetProperty = $config.targets.PSObject.Properties[$Target]
@@ -159,9 +161,9 @@ if ($profile) { Write-Host "Profile:   $profile" }
 if ($radio) { Write-Host "Radio:     $radio" }
 Write-Host "SD path:   $sdPath"
 
-$process = Start-Process -FilePath $simulatorExe \
-    -ArgumentList $arguments \
-    -WorkingDirectory (Split-Path -Parent $simulatorExe) \
+$process = Start-Process -FilePath $simulatorExe `
+    -ArgumentList $arguments `
+    -WorkingDirectory (Split-Path -Parent $simulatorExe) `
     -PassThru
 
 Write-Host "EdgeTX simulator started (PID $($process.Id))."
